@@ -103,6 +103,8 @@ final class BannerView: NSView {
         guard next != phase else { return }
         let wasHidden = phase == .hidden
         phase = next
+        // ui.* can't see the banner while mapod is down, so drives read this line instead.
+        MapoLog.shared.info("banner \(next.rawValue)\(text.isEmpty ? "" : ": " + text)")
         if next == .hidden {
             isHidden = true
         } else if wasHidden {

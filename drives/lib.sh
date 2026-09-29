@@ -26,7 +26,8 @@ BUDGET_MS=(
     new-tab 150
     workspace-switch 50
     tab-focus 50
-    app-reattach 500
+    app.reattach 500
+    relaunch 500
 )
 
 typeset -g DRIVE_NAME="" DRIVE_INSTANCE="" EVIDENCE="" DRIVE_TMP="" SNAP="" SHOT=""
@@ -134,6 +135,19 @@ _drive_start_app_impl() {
     launch=$(mapo ui metrics 2>/dev/null | jq '.launch.processStartToFirstFrameMs // empty' || true)
     [[ -n $launch ]] && _drive_record_timing launch "${launch%.*}"
     return 0
+}
+
+# wait_app [TIMEOUT_MS]: waits until the app is registered with the daemon again (after a
+# daemon restart the app reconnects with backoff).
+wait_app() {
+    local deadline=$(( EPOCHREALTIME + ${1:-10000} / 1000.0 ))
+    while (( EPOCHREALTIME < deadline )); do
+        "$MAPO_BIN" --instance "$DRIVE_INSTANCE" --json ui window >/dev/null 2>&1 && return 0
+        sleep 0.1
+    done
+    print "   FAIL the app didn't reconnect within ${1:-10000} ms"
+    DRIVE_FAILS+=1
+    return 1
 }
 
 # ui_snapshot STEP: snapshot-NN-STEP.json, and SNAP points at it.

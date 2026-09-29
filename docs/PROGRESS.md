@@ -8,7 +8,7 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 - **Install the Metal Toolchain?** (`xcodebuild -downloadComponent MetalToolchain`, an Apple component outside Homebrew and cargo, so HANDOFF §6.4 leaves it to you). SwiftTerm 1.12 and later compile a Metal shader and fail without it, so the fallback is pinned to SwiftTerm 1.11.2 (CoreGraphics renderer). Moving to 1.20.0 is a one-line change once it's installed.
 - Session `mapo-native` never processed its kickoff: the cross-session message stayed queued and the session stayed "waiting", probably blocked on something in its UI. The overnight run was moved to `mapo-bf` as coordinator (HANDOFF §7). Check what `mapo-native` was waiting on.
 
-- Before the first overnight run, do the HANDOFF §4 pre-flight: Screen Recording for the terminal app that runs the agent, and permissions for the agent session.
+- **Screen Recording pre-flight (HANDOFF §4).** On 2026-09-28 at 23:49, `screencapture -x` from the agent's host app (cmux, `com.cmuxterm.app`) exited 0 but produced an all-black image: either Screen Recording isn't granted to cmux, or the display was asleep or locked. Tonight's drives run on semantic snapshots and record `pixels: unavailable`; visual claims are listed under "Not verified". To fix it: System Settings › Privacy & Security › Screen & System Audio Recording › enable cmux, reopen it, and keep the display awake (`caffeinate -dimsu`).
 
 ## Deviations
 

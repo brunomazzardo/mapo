@@ -67,6 +67,13 @@ ms=$(mapo ui metrics | jq '[.navigation[]? | select(.name == "file.open") | .ms]
 _drive_record_timing file.open "$ms"
 print -r -- "{\"ms\":$ms}" | expect_json '.ms >= 0 and .ms <= 100' true
 
+step "Tree-sitter highlights the whole 2,000-line file, off the main thread (R-ED-2)"
+len=$(wc -c < "$D/big.swift" | tr -d ' ')
+hl() { mapo ui snapshot | jq -c --arg p "$D/big.swift" '[.model.editors[]? | select(.path == $p) | .highlight] | first' }
+for _ in {1..60}; do [[ $(hl | jq '.length // 0') == "$len" ]] && break; sleep 0.05; done
+hl | expect_json "{engine, full: (.length == $len), keywords: (.kinds.keyword >= 2000)}" \
+  '{"engine":"tree-sitter","full":true,"keywords":true}'
+
 step "An external change reloads a clean buffer"
 mapo file open "$D/a.swift" >/dev/null
 wait_focus "editor:$D/a.swift"

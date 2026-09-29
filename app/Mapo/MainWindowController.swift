@@ -537,7 +537,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     /// `ui.snapshot` model fields for drives (ENGINEERING §4.4): `view`, the view-only state the menus
-    /// change, and `commands`, the command table the `task-t1-8` drive walks.
+    /// change, `commands`, the command table the `task-t1-8` drive walks, and `editors`, the open editors'
+    /// highlighting.
     func automationModel() -> [String: JSONValue] {
         let split = window?.contentViewController as? NSSplitViewController
         let view: [String: JSONValue] = [
@@ -552,6 +553,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             "view": .object(view), "commands": .array(commands),
             "dockBadge": .number(Double(attention?.dockBadge ?? 0)),
             "dockBadgeLabel": .string(NSApp.dockTile.badgeLabel ?? ""),
+            "editors": FileEditors.automationModel(),
         ]
     }
 

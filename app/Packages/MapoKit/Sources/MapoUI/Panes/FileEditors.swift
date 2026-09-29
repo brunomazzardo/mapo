@@ -1,5 +1,6 @@
 import AppKit
 import MapoEditor
+import MapoProtocol
 
 /// The app's file editors (UX §6, PLAN T1.6): one `EditorRegistry` drawn with Mapo's tokens, the quit
 /// confirmation for unsaved files, the window's edited dot, and focus for a file someone just opened.
@@ -27,6 +28,27 @@ public enum FileEditors {
                 .type: Tokens.syntaxType, .number: Tokens.syntaxNumber, .punctuation: Tokens.syntaxPunctuation,
                 .comment: Tokens.syntaxComment,
             ], gitAdded: Tokens.done, gitModified: Tokens.running, gitDeleted: Tokens.failed)
+    }
+
+    /// `ui.snapshot`'s `editors` field: each open editor's language and its last highlight pass (R-ED-2), so
+    /// drives can check highlighting without pixels.
+    public static func automationModel() -> JSONValue {
+        .array(
+            registry.all.map { editor in
+                var highlight = JSONValue.null
+                if let summary = editor.highlight {
+                    let kinds = summary.kinds.map { ($0.key.rawValue, JSONValue.number(Double($0.value))) }
+                    highlight = .object([
+                        "engine": .string(summary.engine), "length": .number(Double(summary.length)),
+                        "kinds": .object(Dictionary(uniqueKeysWithValues: kinds)),
+                    ])
+                }
+                return .object([
+                    "path": .string(editor.path),
+                    "language": editor.language.map { .string($0.rawValue) } ?? .null,
+                    "highlight": highlight,
+                ])
+            })
     }
 
     // MARK: Focus

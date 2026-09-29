@@ -327,6 +327,7 @@ just mapo ui metrics | jq '.navigation[] | select(.name == "workspace.switch")'
 | `tree` | the element tree (PROTOCOL §7): id, role, label, value (the raw state such as `needs-you`, or field text; UX §2.4), frame, focused, enabled, children |
 | `model.workspaceId`, `model.layout` | the active workspace and the Layout the app renders |
 | `model.rail` | rows in display order, shaped as UX §3.8 specifies: `{kind:"workspace", name, state, accessory, …}` and `{kind:"tab", name, display, icon, state, accessory, selected, …}` |
+| `model.editors` | one entry per open file editor: `{path, language, highlight}`, where `highlight` is the last highlight pass, `{engine: "tree-sitter" \| "regex", length, kinds: {keyword: n, …}}`, or null for plain text (R-ED-2) |
 | `terminals` | one entry per visible terminal pane: `{tabId, paneId, text}`, where `text` follows `tab read` rules (visible rows, populated rows below the cursor, no trailing blanks) |
 
 A snapshot has no colors, fonts, materials or pixels. Frames still show geometry: rail rows are 24 pt (tabs) and 26 pt (workspaces), panes tile without gaps or overlaps, and nothing lies outside the window.

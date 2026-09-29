@@ -35,6 +35,11 @@ public final class EditorRegistry {
         for (path, editor) in editors where path.hasPrefix(root + "/") { editor.refreshBaseText() }
     }
 
+    /// Every open editor, by path.
+    public var all: [FileEditorView] {
+        editors.values.sorted { $0.path < $1.path }
+    }
+
     public func existing(for path: String) -> FileEditorView? {
         editors[path]
     }

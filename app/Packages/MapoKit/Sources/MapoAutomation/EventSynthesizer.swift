@@ -57,6 +57,14 @@ struct EventSynthesizer {
             sendFlags(chord.modifiers, phase: phase)
             return
         }
+        if phase != .up, Self.isQuit(chord) {
+            // Quitting may put up the unsaved-files sheet, whose modal loop would block this handler and
+            // every later ui.* call. Answer first, then quit on the next run loop turn.
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { NSApp.terminate(nil) }
+            }
+            return
+        }
         if phase != .up, let down = keyEvent(.keyDown, key: key, modifiers: chord.modifiers) {
             let handled: Bool
             if NSApp.keyWindow === window {
@@ -69,6 +77,11 @@ struct EventSynthesizer {
         if phase != .down, let up = keyEvent(.keyUp, key: key, modifiers: chord.modifiers) {
             window.sendEvent(up)
         }
+    }
+
+    private static func isQuit(_ chord: KeyChord) -> Bool {
+        chord.modifiers.flags.intersection([.command, .shift, .option, .control]) == .command
+            && chord.key.map { USKeyboard.charactersIgnoringModifiers(of: $0, modifiers: chord.modifiers) } == "q"
     }
 
     /// While the app is inactive, which is the usual state while an agent drives it from a terminal, the

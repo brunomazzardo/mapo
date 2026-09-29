@@ -19,6 +19,8 @@ final class MapoWindow: NSWindow {
         tabbingMode = .disallowed
         minSize = Self.minimumSize
         isReleasedWhenClosed = false
+        // Under the backdrop view (UX §9.1), for the moments before the content view draws.
+        backgroundColor = Theme.backdropBottom
         setAccessibilityIdentifier(AXID.windowMain)
     }
 

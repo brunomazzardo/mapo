@@ -1,5 +1,6 @@
 import AppKit
 import MapoClient
+import MapoEditor
 import MapoProtocol
 import MapoTerminal
 
@@ -54,7 +55,7 @@ final class WorkspacePanesView: NSView {
 
         func build(_ node: LayoutNode) -> NSView {
             switch node {
-            case .pane(let id, let content, _):
+            case .pane(let id, let content, let recentFiles):
                 seenCards.insert(id)
                 let card = cards[id] ?? PaneCardView(actions: actions)
                 cards[id] = card
@@ -65,13 +66,16 @@ final class WorkspacePanesView: NSView {
                     host = registry.host(for: tabId, tabName: summary.name)
                     shown.append(tabId)
                 }
+                // A file pane hosts its path's editor (T1.6); diffs arrive in T4.2.
+                var editor: FileEditorView?
+                if case .file(let path) = content { editor = FileEditors.registry.editor(for: path) }
                 let isFocused = id == focused
                 card.update(
                     PaneCardModel(
                         paneId: id, content: content, tab: tab, branch: branch, isFocused: isFocused,
                         showsRing: paneCount > 1, isKeyWindow: isKeyWindow,
-                        takesReturn: isFocused && tab == nil && !content.isFile),
-                    host: host)
+                        takesReturn: isFocused && tab == nil && !content.isFile, recentFiles: recentFiles),
+                    host: host, editor: editor)
                 return card
             case .split(let id, let axis, let ratios, let children):
                 seenSplits.insert(id)
@@ -95,6 +99,7 @@ final class WorkspacePanesView: NSView {
         }
         for (id, card) in cards where !seenCards.contains(id) {
             card.removeFromSuperview()
+            card.update(card.model ?? Self.closedModel(id), host: nil, editor: nil)
             cards[id] = nil
         }
         for (id, split) in splits where !seenSplits.contains(id) {
@@ -103,6 +108,14 @@ final class WorkspacePanesView: NSView {
         }
         shownTabIds = shown
         focusedPaneId = focused
+        if !isHidden { FileEditors.focusPendingIfShown() }
+    }
+
+    /// A stand-in model for releasing a closed card's editor.
+    private static func closedModel(_ paneId: String) -> PaneCardModel {
+        PaneCardModel(
+            paneId: paneId, content: .empty, tab: nil, branch: nil, isFocused: false, showsRing: false,
+            isKeyWindow: false, takesReturn: false)
     }
 
     func card(for paneId: String) -> PaneCardView? {

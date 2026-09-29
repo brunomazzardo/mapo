@@ -38,7 +38,6 @@ public final class PaneAreaViewController: NSViewController {
     private let registry: SurfaceRegistry
     private let actions: PaneAreaActions
 
-    private let backdrop = BackdropView()
     private let panesHost = FlippedView()
     private let banner = BannerView()
     private let placeholder = PlaceholderView()
@@ -76,17 +75,13 @@ public final class PaneAreaViewController: NSViewController {
 
     public override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 860, height: 900))
-        for view in [backdrop, panesHost, placeholder, banner] as [NSView] {
+        for view in [panesHost, placeholder, banner] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         let top = root.safeAreaLayoutGuide.topAnchor
         // Panes sit 10 from the rail, the inspector and the window bottom, and 4 below the toolbar (UX §2.2).
         NSLayoutConstraint.activate([
-            backdrop.topAnchor.constraint(equalTo: root.topAnchor),
-            backdrop.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            backdrop.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             panesHost.topAnchor.constraint(equalTo: top, constant: 4),
             panesHost.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             panesHost.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
@@ -258,7 +253,14 @@ public final class PaneAreaViewController: NSViewController {
                         registry.existingHost(for: id)?.reconnect()
                     }
                 },
-                closeTab: { [weak self] id in self?.actions.closeTab(id) }),
+                closeTab: { [weak self] id in self?.actions.closeTab(id) },
+                openFile: { [weak self] path in
+                    self?.expectFocusChange()
+                    self?.actions.perform("file.open") { try await $0.openFile(path: path) }
+                },
+                clearRecentFiles: { [weak self] id in
+                    self?.actions.perform("pane.clearRecent") { try await $0.clearRecentFiles(pane: id) }
+                }),
             onResize: { [weak self] split, ratios in
                 self?.actions.perform("pane.resize") { try await $0.resizeSplit(id: split, ratios: ratios) }
             },
@@ -324,42 +326,6 @@ public final class PaneAreaViewController: NSViewController {
 /// A plain flipped container.
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
-}
-
-/// The window backdrop behind the panes (UX §9.1), a vertical gradient.
-final class BackdropView: NSView {
-    private let gradient = CAGradientLayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.addSublayer(gradient)
-        applyColors()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("BackdropView is built in code")
-    }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        gradient.frame = bounds
-        CATransaction.commit()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        applyColors()
-    }
-
-    private func applyColors() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            gradient.colors = [Tokens.backdropBottom.cgColor, Tokens.backdropTop.cgColor]
-        }
-    }
 }
 
 /// The centered text of the panes area: connecting, no workspace, or the empty pane of UX §4.4.

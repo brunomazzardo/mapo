@@ -118,6 +118,22 @@ pub fn tab_in<'a>(layout: &'a Layout, pane: &str) -> Option<&'a str> {
     }
 }
 
+/// The workspace's file pane (UX §6: at most one), if any.
+pub fn file_pane(layout: &Layout) -> Option<&str> {
+    fn find(node: &Node) -> Option<&str> {
+        match node {
+            Node::Pane {
+                id,
+                content: PaneContent::File { .. },
+                ..
+            } => Some(id),
+            Node::Pane { .. } => None,
+            Node::Split { children, .. } => children.iter().find_map(find),
+        }
+    }
+    find(&layout.root)
+}
+
 /// Every pane's rectangle in the unit square, in tree order.
 pub fn rects(layout: &Layout) -> Vec<(String, Rect)> {
     fn walk(node: &Node, r: Rect, out: &mut Vec<(String, Rect)>) {
@@ -217,6 +233,56 @@ pub fn set_content(layout: &mut Layout, pane: &str, new: PaneContent) -> Result<
         Ok(())
     } else {
         Err(LayoutError::PaneNotFound(pane.to_owned()))
+    }
+}
+
+/// How many recent files a file pane keeps (UX §6.1).
+pub const RECENT_FILES: usize = 10;
+
+/// Shows `path` in pane `pane` and puts it first in the pane's recent files, newest first, without
+/// duplicates and at most `RECENT_FILES` long.
+pub fn open_file(layout: &mut Layout, pane: &str, path: &str) -> Result<(), LayoutError> {
+    let node = pane_mut(&mut layout.root, pane)
+        .ok_or_else(|| LayoutError::PaneNotFound(pane.to_owned()))?;
+    if let Node::Pane {
+        content,
+        recent_files,
+        ..
+    } = node
+    {
+        *content = PaneContent::File {
+            file: path.to_owned(),
+        };
+        recent_files.retain(|p| p != path);
+        recent_files.insert(0, path.to_owned());
+        recent_files.truncate(RECENT_FILES);
+    }
+    Ok(())
+}
+
+/// Empties pane `pane`'s recent files, keeping the file it shows.
+pub fn clear_recent(layout: &mut Layout, pane: &str) -> Result<(), LayoutError> {
+    let node = pane_mut(&mut layout.root, pane)
+        .ok_or_else(|| LayoutError::PaneNotFound(pane.to_owned()))?;
+    if let Node::Pane {
+        content,
+        recent_files,
+        ..
+    } = node
+    {
+        recent_files.clear();
+        if let PaneContent::File { file } = content {
+            recent_files.push(file.clone());
+        }
+    }
+    Ok(())
+}
+
+fn pane_mut<'a>(node: &'a mut Node, pane: &str) -> Option<&'a mut Node> {
+    match node {
+        Node::Pane { id, .. } if id == pane => Some(node),
+        Node::Pane { .. } => None,
+        Node::Split { children, .. } => children.iter_mut().find_map(|c| pane_mut(c, pane)),
     }
 }
 
@@ -797,6 +863,55 @@ mod tests {
                 (g, w) => panic!("{name}: got {g:?}, want {w:?}"),
             }
         }
+    }
+
+    /// The recent files of pane `id`.
+    fn recent(layout: &Layout, pane: &str) -> Vec<String> {
+        fn find(node: &Node, pane: &str) -> Option<Vec<String>> {
+            match node {
+                Node::Pane {
+                    id, recent_files, ..
+                } => (id == pane).then(|| recent_files.clone()),
+                Node::Split { children, .. } => children.iter().find_map(|c| find(c, pane)),
+            }
+        }
+        find(&layout.root, pane).unwrap_or_default()
+    }
+
+    #[test]
+    fn open_file_cases() {
+        let mut layout = grid();
+        assert_eq!(file_pane(&layout), None);
+        let mut opened = |path: &str| {
+            open_file(&mut layout, "b", path).unwrap();
+            (
+                file_pane(&layout).map(str::to_owned),
+                recent(&layout, "b").join(","),
+            )
+        };
+        let steps: Vec<(&str, &str)> = vec![
+            ("/x/a", "/x/a"),
+            ("/x/b", "/x/b,/x/a"),
+            ("/x/a", "/x/a,/x/b"),
+        ];
+        for (path, want) in steps {
+            assert_eq!(
+                opened(path),
+                (Some("b".to_owned()), want.to_owned()),
+                "{path}"
+            );
+        }
+        for i in 0..20 {
+            open_file(&mut layout, "b", &format!("/y/{i}")).unwrap();
+        }
+        let r = recent(&layout, "b");
+        assert_eq!((r.len(), r[0].as_str()), (RECENT_FILES, "/y/19"));
+        clear_recent(&mut layout, "b").unwrap();
+        assert_eq!(recent(&layout, "b"), vec!["/y/19".to_owned()]);
+        assert_eq!(
+            open_file(&mut layout, "zz", "/a"),
+            Err(LayoutError::PaneNotFound("zz".into()))
+        );
     }
 
     #[test]

@@ -9,6 +9,9 @@ public final class AutomationServer {
     private let store: AppStore
     private let metrics: UIMetrics
     private let window: () -> NSWindow?
+    /// More `ui.snapshot` model fields from the app: `view` (font size, columns, palette) and `commands`
+    /// (the command table, the checklist `drives/task-t1-8.sh` walks).
+    public var snapshotModel: (() -> [String: JSONValue])?
 
     public init(store: AppStore, metrics: UIMetrics, window: @escaping () -> NSWindow?) {
         self.store = store
@@ -51,12 +54,31 @@ public final class AutomationServer {
     }
 
     private static func windowInfo(_ window: NSWindow) -> [String: JSONValue] {
-        [
+        // The three traffic lights' union in window points (top-left origin), and whether a title bar shows
+        // (UX §2: none; the traffic lights sit inside the rail).
+        let lights = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+            .compactMap { window.standardWindowButton($0) }
+            .filter { !$0.isHidden }
+            .map {
+                ElementGeometry.windowFrame(
+                    ofScreenRect: $0.window?.convertToScreen($0.convert($0.bounds, to: nil)) ?? .zero, in: window)
+            }
+            .reduce(NSRect.null) { $0.union($1) }
+        let titleBarHidden =
+            window.titleVisibility == .hidden && window.titlebarAppearsTransparent
+            && window.styleMask.contains(.fullSizeContentView)
+        return [
             "windowNumber": .number(Double(window.windowNumber)),
             "frame": ElementGeometry.screenFrame(of: window).json,
             "scale": .number(Double(window.backingScaleFactor)),
             "title": .string(window.title),
             "occluded": .bool(!window.occlusionState.contains(.visible)),
+            // The resolved look (UX §9, PLAN T1.9), so drives can check `[ui]` without pixels.
+            "appearance": .string(Theme.appearanceName(of: window.effectiveAppearance)),
+            "reduceTransparency": .bool(Theme.reduceTransparency),
+            "increaseContrast": .bool(Theme.increaseContrast),
+            "titleBarHidden": .bool(titleBarHidden),
+            "trafficLights": lights.isNull ? .null : lights.json,
         ]
     }
 
@@ -79,15 +101,17 @@ public final class AutomationServer {
         if let workspaceId = store.activeWorkspaceId, let value = store.layouts[workspaceId] {
             layout = (try? JSONValue(encoding: value)) ?? .null
         }
+        var model: [String: JSONValue] = [
+            "workspaceId": store.activeWorkspaceId.map(JSONValue.string) ?? .null,
+            "layout": layout,
+            "rail": .array(RailSnapshot.rows(store)),
+        ]
+        model.merge(snapshotModel?() ?? [:]) { current, _ in current }
         return .object([
             "window": .object(Self.windowInfo(window)),
             "focus": focus.map { .object($0.reference) } ?? .null,
             "tree": tree.json,
-            "model": .object([
-                "workspaceId": store.activeWorkspaceId.map(JSONValue.string) ?? .null,
-                "layout": layout,
-                "rail": .array(RailSnapshot.rows(store)),
-            ]),
+            "model": .object(model),
         ])
     }
 
@@ -154,7 +178,7 @@ public final class AutomationServer {
             throw RPCError.make(.invalidArgument, "text must be a string")
         }
         do {
-            try EventSynthesizer(window: window).type(text)
+            try EventSynthesizer(window: ElementTreeBuilder.inputWindow(of: window)).type(text)
         } catch .untypable(let character) {
             throw RPCError.make(
                 .invalidArgument,
@@ -179,7 +203,7 @@ public final class AutomationServer {
                 hint: "Modifiers cmd, shift, alt, ctrl joined with +, then a key such as t, return or f5")
         }
         let phase = try params.enumValue("phase", EventSynthesizer.KeyPhase.self) ?? .press
-        EventSynthesizer(window: window).send(chord, phase: phase)
+        EventSynthesizer(window: ElementTreeBuilder.inputWindow(of: window)).send(chord, phase: phase)
         return .object(["ok": .bool(true)])
     }
 

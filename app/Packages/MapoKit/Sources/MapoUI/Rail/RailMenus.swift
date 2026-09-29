@@ -48,7 +48,7 @@ extension RailViewController {
 
     /// New Shell Tab · New Agent Tab | Rename | Move Up · Move Down | Delete Workspace.
     private func workspaceMenu(_ id: String, key: String) -> [[NSMenuItem]] {
-        guard let workspace = store.workspace(id: id) else { return [] }
+        guard store.workspace(id: id) != nil else { return [] }
         let position = store.workspaces.firstIndex { $0.id == id } ?? 0
         return [
             [
@@ -63,17 +63,20 @@ extension RailViewController {
             moveItems(position: position, count: store.workspaces.count, key: key) { client, index in
                 try await client.moveWorkspace(id: id, to: index)
             },
-            [
-                railMenuItem("Delete Workspace") { [weak self] in
-                    self?.runConfirming(
-                        "Delete Workspace", title: "Delete \"\(workspace.name)\"?",
-                        message: { self?.deleteMessage(workspace) ?? "" }, confirm: "Delete Workspace"
-                    ) { client, force in
-                        try await client.deleteWorkspace(id: id, force: force)
-                    }
-                }
-            ],
+            [railMenuItem("Delete Workspace") { [weak self] in self?.deleteWorkspace(id: id) }],
         ]
+    }
+
+    /// Delete Workspace, from this menu, the Workspace menu or the palette: asks first when programs run
+    /// (UX §3.5).
+    public func deleteWorkspace(id: String) {
+        guard let workspace = store.workspace(id: id) else { return }
+        runConfirming(
+            "Delete Workspace", title: "Delete \"\(workspace.name)\"?",
+            message: { [weak self] in self?.deleteMessage(workspace) ?? "" }, confirm: "Delete Workspace"
+        ) { client, force in
+            try await client.deleteWorkspace(id: id, force: force)
+        }
     }
 
     /// Rename · Copy Name · Copy Path · Reveal in Finder | Show to the Right · Show Below | Interrupt Agent ·

@@ -422,7 +422,7 @@ The standard items keep their macOS places and shortcuts: About Mapo, Hide Mapo 
 
 ## 9. Appearance tokens
 
-Task T1.9. Tokens live in `MapoUI/Theme/Tokens.swift` as `NSColor(name:dynamicProvider:)`, resolving `.darkAqua`, `.aqua` and both `.accessibilityHighContrast*` appearances. The app follows the system appearance, and `[ui] theme = "mapo-glass"` selects this palette.
+Task T1.9. Tokens live in `MapoUI/Theme/Tokens.swift` as `Theme` (also spelled `Tokens`): `NSColor(name:dynamicProvider:)` colors resolving `.darkAqua`, `.aqua` and both `.accessibilityHighContrast*` appearances, plus `Theme.Radius`, `Theme.Spacing`, `Theme.focusRingWidth` and `Theme.Motion`. The app follows the system appearance, and `[ui] theme = "mapo-glass"` selects this palette. `[ui] appearance = "system" | "dark" | "light"` and `reduce-transparency = "system" | "on" | "off"` override the system for this instance, so drives can capture every variant; they are read at launch (`Theme.apply`, `MapoUI/Theme/Appearance.swift`), and `ui.window` reports the result as `appearance`, `reduceTransparency` and `increaseContrast`.
 
 ### 9.1 Colors
 
@@ -496,6 +496,8 @@ The app reads `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`, `acce
 | Any other glass Mapo draws; none is planned in v1 | `glass` | Opaque `#2B2E36` (light `#F7F8FA`) |
 | Menus, popovers, alerts, notifications | System | macOS handles it |
 | Panes, headers, editor, terminal | Opaque `pane`, never glass | Unchanged |
+
+With `reduce-transparency = "on"` while the system setting is off, macOS keeps the rail and inspector glass, so Mapo lays a `glassOpaque` fill (radius 14) under their content. `"off"` can't undo the system setting for system glass; it only keeps Mapo's own overlays translucent.
 
 ## 10. The ⌘K palette
 

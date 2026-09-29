@@ -4,7 +4,8 @@
 
 use mapo_protocol::hello::Caller;
 use mapo_protocol::types::{
-    Node, PaneContent, PaneFocus, PaneRef, PaneResize, PaneSplit, SplitContent, TabCreate, TabKind,
+    FileOpen, Node, PaneContent, PaneFocus, PaneRef, PaneResize, PaneSplit, SplitContent,
+    TabCreate, TabKind,
 };
 use mapo_protocol::{RpcError, methods, parse_params};
 use serde_json::Value;
@@ -91,9 +92,69 @@ impl Core {
                 self.layout_changed(ws);
                 ws
             }
+            methods::PANE_CLEAR_RECENT => {
+                let p: PaneRef = parse_params(params)?;
+                let (ws, pane) =
+                    self.pane_target(p.workspace.as_deref(), p.pane.as_deref(), caller)?;
+                layout::clear_recent(&mut self.workspaces[ws].layout, &pane)
+                    .map_err(layout_error)?;
+                self.layout_changed(ws);
+                ws
+            }
             other => return Err(RpcError::invalid(format!("unknown method {other}"))),
         };
         to_value(&self.workspaces[ws].layout)
+    }
+
+    /// `file.open` (R-LAY-5, UX §6) after the daemon checked that `path` is a readable regular
+    /// file: the workspace's file pane shows it, or, with none, a focused empty pane, or a split to
+    /// the right of the focused terminal. The file pane gets focus and its workspace activates.
+    pub(super) fn file_open(&mut self, p: FileOpen, caller: &Caller) -> Result<Value, RpcError> {
+        if !p.path.starts_with('/') {
+            return Err(RpcError::invalid(format!(
+                "path must be absolute: {}",
+                p.path
+            )));
+        }
+        let ws = self.resolve_workspace(p.workspace.as_deref(), caller)?;
+        let layout = &self.workspaces[ws].layout;
+        let focused = layout.focused_pane_id.clone();
+        let pane = match layout::file_pane(layout).map(str::to_owned) {
+            Some(pane) => pane,
+            None if matches!(
+                layout::content(layout, &focused),
+                Some(PaneContent::Empty { .. })
+            ) || p.beside == Some(false) =>
+            {
+                focused
+            }
+            None => {
+                // Right of the focused terminal; a focused diff pane defers to the last terminal.
+                let target = if is_terminal(layout::content(layout, &focused)) {
+                    focused
+                } else {
+                    self.recent_terminal_pane(ws).unwrap_or(focused)
+                };
+                let empty = PaneContent::Empty { empty: true };
+                let pane = model::new_id();
+                layout::split(
+                    &mut self.workspaces[ws].layout,
+                    &target,
+                    Direction::Right,
+                    empty,
+                    &pane,
+                    &model::new_id(),
+                )
+                .map_err(layout_error)?;
+                pane
+            }
+        };
+        let layout = &mut self.workspaces[ws].layout;
+        layout::open_file(layout, &pane, &p.path).map_err(layout_error)?;
+        layout.focused_pane_id = pane.clone();
+        self.activate(ws);
+        self.focus_changed(ws);
+        Ok(serde_json::json!({ "path": p.path, "paneId": pane }))
     }
 
     /// The workspace holding pane or split `id`: the `workspace` param's, else any workspace's.

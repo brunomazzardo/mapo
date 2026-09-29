@@ -15,7 +15,6 @@ public final class FilesViewController: NSViewController, NSOutlineViewDataSourc
         static let list = "fs.list"
         static let watch = "fs.watch"
         static let unwatch = "fs.unwatch"
-        static let fileOpen = "file.open"
     }
 
     private let client: MapoClient
@@ -437,15 +436,19 @@ public final class FilesViewController: NSViewController, NSOutlineViewDataSourc
         }
     }
 
-    /// `file.open` (T1.6). Until the daemon has it, the attempt is logged.
+    /// `file.open` (T1.6): the file shows in the file pane and its editor takes focus (REQUIREMENTS §8.3). A
+    /// rejection (the file went away, or can't be read) leaves the layout alone; it logs and beeps until
+    /// `app.notice` shows the daemon's message.
     private func open(_ node: FileNode) {
         let client = client
         let path = node.path
         Task {
             do {
-                _ = try await client.call(Methods.fileOpen, FsPathParams(path: path), as: JSONValue.self)
+                let opened = try await client.openFile(path: path)
+                FileEditors.focusWhenShown(opened.path)
             } catch {
                 MapoLog.shared.info("files: open \(path): file.open failed: \(error)")
+                NSSound.beep()
             }
         }
     }

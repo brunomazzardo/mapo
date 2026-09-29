@@ -26,6 +26,7 @@ BUDGET_MS=(
     new-tab 150
     workspace-switch 50
     tab-focus 50
+    palette.open 50
     app.reattach 500
     relaunch 500
 )

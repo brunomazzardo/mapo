@@ -98,8 +98,22 @@ struct ElementTreeBuilder {
         self.depth = depth
     }
 
+    /// The window that takes typed keys and whose first responder is the focus: an attached sheet, then the
+    /// palette (a child panel with an identifier), then the window itself.
+    static func inputWindow(of window: NSWindow) -> NSWindow {
+        window.attachedSheet ?? overlay(of: window) ?? window
+    }
+
+    /// A visible child panel with an identifier, such as the ⌘K palette (UX §10).
+    static func overlay(of window: NSWindow) -> NSWindow? {
+        window.childWindows?.last { $0.isVisible && $0.canBecomeKey && !$0.accessibilityIdentifier().isEmpty }
+    }
+
     func build() -> UIElement {
-        var walk = Walk(window: window)
+        // Only the input window's first responder counts as focus, so the palette's field or a sheet's field
+        // is the focus while it shows, and the main window's first responder is again once it goes.
+        let input = Self.inputWindow(of: window)
+        var walk = Walk(window: window, focusWindow: input === window ? window : nil)
         var children: [UIElement] = []
         if let content = window.contentView {
             children += walk.elements(of: content, depth: depth - 1)
@@ -110,6 +124,7 @@ struct ElementTreeBuilder {
         }
         // A sheet on the window (`dialog`, UX §3.5) is its own window; list it as a child so drives see it.
         if let sheet = window.attachedSheet, let content = sheet.contentView, depth > 2 {
+            var walk = Walk(window: window, focusWindow: sheet)
             let sheetId = sheet.accessibilityIdentifier()
             children.append(
                 UIElement(
@@ -117,6 +132,16 @@ struct ElementTreeBuilder {
                     value: nil, frame: ElementGeometry.windowFrame(ofScreenRect: sheet.frame, in: window),
                     focused: sheet.isKeyWindow, enabled: true,
                     children: walk.elements(of: content, depth: depth - 2)))
+        }
+        // The palette is a child window; list it as a child so drives see `palette` and its rows.
+        if let overlay = Self.overlay(of: window), let content = overlay.contentView, depth > 2 {
+            var walk = Walk(window: window, focusWindow: input === overlay ? overlay : nil)
+            children.append(
+                UIElement(
+                    object: overlay, id: overlay.accessibilityIdentifier(), role: "window",
+                    label: overlay.title.isEmpty ? nil : overlay.title, value: nil,
+                    frame: ElementGeometry.windowFrame(ofScreenRect: overlay.frame, in: window), focused: false,
+                    enabled: true, children: walk.elements(of: content, depth: depth - 2)))
         }
         let identifier = window.accessibilityIdentifier()
         return UIElement(
@@ -129,12 +154,16 @@ struct ElementTreeBuilder {
     private struct Walk {
         let window: NSWindow
         let focusedView: NSView?
+        /// False while another window takes the keys: nothing in this walk is focused.
+        let reportsFocus: Bool
         var visited = Set<ObjectIdentifier>()
         var count = 0
 
-        init(window: NSWindow) {
+        /// `window` gives the geometry; `focusWindow`'s first responder is the focus, and nil means none.
+        init(window: NSWindow, focusWindow: NSWindow?) {
             self.window = window
-            focusedView = Self.focusedView(in: window)
+            focusedView = focusWindow.flatMap(Self.focusedView(in:))
+            reportsFocus = focusWindow != nil
         }
 
         /// The first responder as a view; a field editor stands for the field it edits.
@@ -194,6 +223,7 @@ struct ElementTreeBuilder {
         }
 
         private func isFocused(_ object: any NSAccessibilityProtocol) -> Bool {
+            guard reportsFocus else { return false }
             if let focusedView {
                 if let view = object as? NSView { return view === focusedView }
                 if let cell = object as? NSCell { return cell.controlView === focusedView }

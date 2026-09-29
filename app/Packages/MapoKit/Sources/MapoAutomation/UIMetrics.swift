@@ -12,13 +12,15 @@ import Observation
 /// without one) to the first frame showing the new state. The first frame is approximated as the next
 /// main-runloop turn after the window displayed the store's new state.
 public final class UIMetrics {
-    /// Navigation names of ENGINEERING §4.3 that M0 records.
+    /// Navigation names of ENGINEERING §4.3 recorded so far.
     public enum Navigation: String, Sendable {
         case appReattach = "app.reattach"
         case workspaceSwitch = "workspace.switch"
         case tabFocus = "tab.focus"
         case tabCreate = "tab.create"
         case paneSplit = "pane.split"
+        case paletteOpen = "palette.open"
+        case fileOpen = "file.open"
     }
 
     private struct Span {
@@ -34,6 +36,8 @@ public final class UIMetrics {
     private var pending: [Int: Span] = [:]
     private var nextSpan = 0
     private var wasConnected = false
+    /// The active workspace and the file its focused pane showed, for `file.open`.
+    private var shownFile: (workspaceId: String, path: String?)?
 
     private static let keep = 200
     /// Spans that never see their state give up after this long rather than report a bogus time.
@@ -44,6 +48,7 @@ public final class UIMetrics {
         self.window = window
         watchLaunch()
         watchConnection()
+        watchFileOpen()
     }
 
     // MARK: Recording
@@ -131,6 +136,23 @@ public final class UIMetrics {
     }
 
     /// `app.reattach`: from losing the daemon to the reconnected, re-synced UI.
+    /// `file.open`, from any caller (the CLI, Files, the palette): from the app seeing the active workspace's
+    /// focused pane show a new file to the first frame with its editor, which loads and highlights in that
+    /// render. A workspace switch doesn't count.
+    private func watchFileOpen() {
+        observeContinuously(self) { metrics in
+            let store = metrics.store
+            guard let workspaceId = store.activeWorkspaceId else { return }
+            var path: String?
+            if case .file(let file)? = store.layouts[workspaceId]?.focusedPane?.content { path = file }
+            let previous = metrics.shownFile
+            metrics.shownFile = (workspaceId, path)
+            guard let path, previous?.workspaceId == workspaceId, previous?.path != path else { return }
+            let span = Span(name: .fileOpen, start: ProcessInfo.processInfo.systemUptime, until: { true })
+            DispatchQueue.main.async { metrics.start(span) }
+        }
+    }
+
     private func watchConnection() {
         observeContinuously(self) { metrics in
             let connected = metrics.store.isConnected

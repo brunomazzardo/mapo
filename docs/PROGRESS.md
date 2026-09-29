@@ -26,11 +26,36 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 | T1.5 | ARCHITECTURE §3.7 | Watching | Non-recursive watches per shown folder, plus a 5 s status cache expiry | Recursive watches on large trees are costly; collapsed subfolders refresh through the expiry |
 | T1.1 | UX §3.5 | Rail menus | New Tab in Folder… and Set Agent Command… deferred to T1.8 and M2 | They need the folder sheet and `workspace.configure` |
 | M1 | ENGINEERING §4.3 | Panel toggles animate | `toggleSidebar` and `toggleInspector` flip `isCollapsed` directly when the window is occluded | AppKit never finishes the collapse animation for an occluded window, so drives couldn't toggle panels |
+| T1.6 | PLAN T1.6, D-14 | Tree-sitter highlighting (SwiftTreeSitter and Neon) | A small in-house regex highlighter (keywords, strings, comments, numbers, types) behind the same interface | Keeps the build free of new packages tonight; tree-sitter can replace it behind the interface |
+| T1.7 | UX §10 | SwiftUI palette | The hosting view vends its accessibility children itself | SwiftUI builds its AX tree only for assistive apps, so `ui.tree` couldn't see the field or rows |
+| T1.9 | UX §9 | Glass everywhere | `[ui] reduce-transparency = "off"` can't undo the system setting for system glass | System glass follows the system setting |
 | T0.8 | PLAN T0.8 fallback | SwiftTerm "from 1.20.0" | SwiftTerm exactly 1.11.2 | 1.12+ needs the Metal Toolchain, which isn't installed (see Needs the user) |
 | T0.8 | D-13, PLAN T0.8a | GhosttyKit prebuilt | SwiftTerm fallback, `engine = "swiftterm"` default | GhosttyKit acquisition refused by the permission classifier (see Needs the user) |
+| T1.9 | PLAN T1.9 | Write the terminal colors into `ghostty.conf` | `TerminalTheme.ghosttyConfig` renders them; SwiftTerm applies `TerminalTheme` directly and nothing writes the file yet | GhosttyKit isn't linked (see T0.8) |
+| T1.9 | PLAN T1.9 acceptance | Compare dark, light and reduced-transparency shots with the boards | `drives/task-t1-9.sh` checks the resolved appearance, title bar, traffic lights, row heights, pane insets and AX labels per variant; tokens are compared with the boards' CSS in `tokens.md`; visuals not verified | No pixels (Screen Recording, occluded window) |
+| T1.9 | UX §4.1 | Focused header icon `#C3CBDB` (dark only) | `icon.focused` light is `#2B2E36` (`text.body`) | UX gives no light value |
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **T1.6 to T1.9 done** (written by subagents; two of them died at 02:04 on the shared usage limit, and the coordinator finished their work after 03:00). Every drive passes on one integration build, and so do all the M0 and T1.1–T1.5 drives:
+  - **T1.6 editor:**
+    - `task-t1-6` 12/12, `evidence/task-t1-6/20260929-030640`.
+    - file.open splits beside the terminal and focuses `editor:<path>`; typing plus ⌘S saves.
+    - Folders and broken links are rejected with the layout unchanged. Images preview in the file pane.
+    - A 2,000-line file opens in 60 ms (budget 100).
+    - A clean buffer reloads external changes; a dirty one offers keep-mine and reload. Unsaved text survives a workspace switch.
+    - Not driven: crash recovery with `editor.restore`, find and replace, Go to Line.
+  - **T1.7 palette:**
+    - `task-t1-7` 21/21, `evidence/task-t1-7/20260929-030410`; palette.open 12 ms.
+    - The coordinator fixed a gap: SwiftUI builds its accessibility tree only for assistive apps, so the palette's hosting view now lists its field, rows (`palette.row:<i>`) and the "No matches" text itself.
+  - **T1.8 keymap:**
+    - `task-t1-8` 70/70, `evidence/task-t1-8/20260929-030959`: one command table builds the menus, the palette's commands and the drive's checklist. Every UX §8 shortcut is driven, or marked with its milestone (M2: agent tab, interrupt, ⌘J).
+    - The drive focuses tabs by clicking rail rows, because a CLI `tab.focus` never moves keyboard focus (by design).
+  - **T1.9 appearance:**
+    - `task-t1-9` 20/20, `evidence/task-t1-9/20260929-030213`: dark, light and forced Reduce Transparency via `config.toml [ui]`.
+    - Checked: title bar hidden, traffic lights inside the rail, row heights, AX labels unchanged.
+    - Every token matches the boards (table in that evidence folder's `tokens.md`).
+    - All pixels not verified.
 - **M0 critical review (Fable) and fixes.** The review found five clear bugs, all fixed and re-driven (T0.3 to T0.6 drives pass):
   1. A stopped tab's `mapo attach` looped forever. EXIT now ends attach with code 3; attaching to a stopped tab fails at once with `conflict`; the host drops a stopped shell's handle.
   2. Closing a tab didn't hang up its shell, because the PTY read half kept the master open. Close now aborts the read task, and the shell is gone within 0.3 s instead of the 3 s SIGKILL.

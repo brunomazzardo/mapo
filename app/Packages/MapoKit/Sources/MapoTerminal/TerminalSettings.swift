@@ -41,15 +41,15 @@ nonisolated public struct TerminalSettings: Equatable, Sendable {
 
 /// Just enough TOML for flat `key = value` tables: strings, numbers, booleans and comments.
 /// Arrays, inline tables and multi-line strings read as `.other`.
-nonisolated enum TOMLSubset {
-    enum Value: Equatable {
+nonisolated public enum TOMLSubset {
+    public enum Value: Equatable, Sendable {
         case string(String)
         case number(Double)
         case bool(Bool)
         case other
     }
 
-    static func table(named name: String, in text: String) -> [String: Value] {
+    public static func table(named name: String, in text: String) -> [String: Value] {
         var result: [String: Value] = [:]
         var inTable = false
         for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {

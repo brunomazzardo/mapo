@@ -182,7 +182,7 @@ Every `ui.*` method is routed to the most recently registered app of the instanc
 |---|---|---|
 | `app.register` | `{capabilities:["ui"], version}` → `{}`. App credential only. | M0 |
 | `ui.visibility` | `{keyWindow:bool, visibleTabIds:[id], focusedTabId?}` → `{}`. App to daemon. | M1 |
-| `ui.window` | `{}` → `{windowNumber, frame:{x,y,w,h}, scale, title, occluded:bool}` | M0 |
+| `ui.window` | `{}` → `{windowNumber, frame:{x,y,w,h}, scale, title, occluded:bool, appearance:"dark"\|"light", reduceTransparency:bool, increaseContrast:bool, titleBarHidden:bool, trafficLights:{x,y,w,h}\|null}`; `trafficLights` is in window points, top-left origin (T1.9) | M0 |
 | `ui.tree` | `{depth?:12, root?:Target}` → `Element` (§7) | M0 |
 | `ui.snapshot` | `{}` → `{window, focus?:ElementRef, tree:Element, model:{workspaceId, layout, rail:[...]}, terminals:[{tabId, paneId, text}]}` | M0 |
 | `ui.click` | `{target, button?:"left"\|"right", count?:1, modifiers?:[..]}` → `{ok:true, element}` | M0 |

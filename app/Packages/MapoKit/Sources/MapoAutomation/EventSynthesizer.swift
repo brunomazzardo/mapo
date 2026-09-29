@@ -85,9 +85,13 @@ struct EventSynthesizer {
             }
             guard let action = item.action, !item.keyEquivalent.isEmpty else { continue }
             var itemFlags = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
-            // An uppercase key equivalent implies shift.
-            if item.keyEquivalent != item.keyEquivalent.lowercased() { itemFlags.insert(.shift) }
-            guard itemFlags == wanted, item.keyEquivalent.lowercased() == key.characters.lowercased() else {
+            // An uppercase key equivalent implies shift, and so does a shifted symbol such as "}" for ⇧⌘].
+            let equivalent = item.keyEquivalent
+            if equivalent != equivalent.lowercased() || USKeyboard.isShiftedSymbol(equivalent) {
+                itemFlags.insert(.shift)
+            }
+            let typed = USKeyboard.charactersIgnoringModifiers(of: key, modifiers: modifiers)
+            guard itemFlags == wanted, equivalent.lowercased() == typed.lowercased() else {
                 continue
             }
             let router = ActionRouter(window: window)

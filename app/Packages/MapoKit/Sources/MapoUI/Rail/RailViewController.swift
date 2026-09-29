@@ -239,6 +239,15 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
 
     // MARK: Rename (UX §3.4)
 
+    /// Rename Tab (⌥⌘R) and Rename Workspace from the menus and the palette: the row's inline field.
+    public func beginRename(tabId: String) {
+        beginRename(key: "tab:\(tabId)")
+    }
+
+    public func beginRename(workspaceId: String) {
+        beginRename(key: "workspace:\(workspaceId)")
+    }
+
     /// Turns the row's name into the `rail.rename` field.
     func beginRename(key: String) {
         guard let index = items.firstIndex(where: { $0.row.key == key }), let id = items[index].row.modelId else {

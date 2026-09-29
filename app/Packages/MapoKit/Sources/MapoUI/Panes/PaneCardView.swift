@@ -1,4 +1,5 @@
 import AppKit
+import MapoEditor
 import MapoProtocol
 import MapoTerminal
 
@@ -10,6 +11,10 @@ struct PaneCardActions {
     var stopTab: (_ tabId: String) -> Void
     var restartTab: (_ tabId: String) -> Void
     var closeTab: (_ tabId: String) -> Void
+    /// `file.open` from the recent-files pull-down (UX §6.1).
+    var openFile: (_ path: String) -> Void
+    /// Clear Recent Files (`pane.clearRecent`).
+    var clearRecentFiles: (_ paneId: String) -> Void
 }
 
 /// What a card shows.
@@ -24,6 +29,8 @@ struct PaneCardModel: Equatable {
     var isKeyWindow: Bool
     /// The empty pane that Return acts on.
     var takesReturn: Bool
+    /// A file pane's recent files, newest first.
+    var recentFiles: [String] = []
 }
 
 /// A pane (UX §4.1): an opaque card, radius 12, 1 pt hairline, clipped content, with the header, the
@@ -33,6 +40,8 @@ struct PaneCardModel: Equatable {
 final class PaneCardView: NSView {
     private(set) var model: PaneCardModel?
     private(set) weak var host: TerminalHostView?
+    /// The file pane's editor (T1.6).
+    private(set) weak var editor: FileEditorView?
     private let actions: PaneCardActions
 
     private let ring = CALayer()
@@ -48,14 +57,12 @@ final class PaneCardView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = false
-        ring.cornerRadius = 13.5
         ring.cornerCurve = .continuous
-        ring.borderWidth = 1.5
         ring.isHidden = true
         layer?.addSublayer(ring)
 
         clip.wantsLayer = true
-        clip.layer?.cornerRadius = 12
+        clip.layer?.cornerRadius = Theme.Radius.pane
         clip.layer?.cornerCurve = .continuous
         clip.layer?.masksToBounds = true
         clip.layer?.borderWidth = 1
@@ -67,7 +74,9 @@ final class PaneCardView: NSView {
         fileLabel.alignment = .center
         body.addSubview(fileLabel)
 
-        header.onClose = { [weak self] in self?.model.map { actions.closePane($0.paneId) } }
+        header.onClose = { [weak self] in self?.close() }
+        header.onOpenRecent = { path in actions.openFile(path) }
+        header.onClearRecent = { [weak self] in self?.model.map { actions.clearRecentFiles($0.paneId) } }
         header.onStop = { [weak self] in self?.model?.tab.map { actions.stopTab($0.id) } }
         empty.onNewTab = { [weak self] kind in self?.model.map { actions.newTab($0.paneId, kind) } }
         exitBar.onRestart = { [weak self] in self?.model?.tab.map { actions.restartTab($0.id) } }
@@ -85,8 +94,34 @@ final class PaneCardView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// Shows `model`, hosting `host` in the body when the pane shows a terminal.
-    func update(_ model: PaneCardModel, host: TerminalHostView?) {
+    /// Shows `model`, hosting `host` in the body when the pane shows a terminal, or `editor` when it shows a
+    /// file.
+    func update(_ model: PaneCardModel, host: TerminalHostView?, editor: FileEditorView? = nil) {
+        if editor !== self.editor {
+            if let old = self.editor {
+                old.onStateChange = nil
+                old.onCloseRequest = nil
+                if old.superview === body { old.removeFromSuperview() }
+                FileEditors.registry.release(old.path)
+            }
+            self.editor = editor
+            if let editor {
+                body.addSubview(editor, positioned: .below, relativeTo: empty)
+                editor.onStateChange = { [weak self, weak editor] in
+                    guard let self, let editor, editor === self.editor else { return }
+                    header.updateFile(dirty: editor.isDirty, meta: editor.headerMeta)
+                }
+                editor.onCloseRequest = { [weak self] in
+                    guard let self, let paneId = self.model?.paneId else { return }
+                    actions.closePane(paneId)
+                }
+            }
+            needsLayout = true
+        } else if let editor, editor.superview !== body {
+            // Another workspace's card showed the same file meanwhile; take it back.
+            body.addSubview(editor, positioned: .below, relativeTo: empty)
+            needsLayout = true
+        }
         if host !== self.host {
             // The host may have moved to another card already in this pass; only take ours out.
             if let old = self.host, old.superview === body { old.removeFromSuperview() }
@@ -104,9 +139,10 @@ final class PaneCardView: NSView {
         header.isHidden = !(model.tab != nil || model.content.isFile)
         empty.isHidden = !(model.tab == nil && !model.content.isFile)
         empty.update(paneId: model.paneId, takesReturn: model.takesReturn)
-        fileLabel.isHidden = !model.content.isFile
+        fileLabel.isHidden = editor != nil || !model.content.isFile
         fileLabel.stringValue =
-            model.content.filePath.map { "\(($0 as NSString).lastPathComponent)\nFiles open in T1.6." } ?? ""
+            model.content.filePath.map { "\(($0 as NSString).lastPathComponent)\nDiffs open in T4.2." } ?? ""
+        if let editor { header.updateFile(dirty: editor.isDirty, meta: editor.headerMeta) }
         exitBar.update(model.tab)
 
         if let tab = model.tab {
@@ -137,12 +173,13 @@ final class PaneCardView: NSView {
         // The terminal sits 8 below the header and 10 in from the sides (the libghostty padding comes on top).
         host?.frame = body.bounds.insetBy(dx: 10, dy: 8)
         empty.frame = body.bounds
+        if let editor, editor.superview === body { editor.frame = body.bounds }
         fileLabel.frame = NSRect(x: 12, y: body.bounds.midY - 20, width: max(body.bounds.width - 24, 0), height: 40)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        ring.frame = bounds.insetBy(dx: -1.5, dy: -1.5)
+        ring.frame = bounds.insetBy(dx: -ring.borderWidth, dy: -ring.borderWidth)
         layer?.shadowPath = CGPath(
-            roundedRect: bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            roundedRect: bounds, cornerWidth: Theme.Radius.pane, cornerHeight: Theme.Radius.pane, transform: nil)
         CATransaction.commit()
     }
 
@@ -156,12 +193,16 @@ final class PaneCardView: NSView {
         let failed = model?.tab?.state == .failed && !(model?.isFocused ?? false)
         effectiveAppearance.performAsCurrentDrawingAppearance {
             clip.layer?.backgroundColor = Tokens.pane.cgColor
-            clip.layer?.borderColor = (failed ? Tokens.failed.withAlphaComponent(0.35) : Tokens.paneHairline).cgColor
+            clip.layer?.borderColor = (failed ? Tokens.failedBorder : Tokens.paneHairline).cgColor
             let alpha: CGFloat = (model?.isKeyWindow ?? true) ? 1 : 0.35
             ring.borderColor = Tokens.accent.withAlphaComponent(alpha).cgColor
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // 1.5 pt, or 2 under Increase Contrast (UX §9.1), outside the card's edge.
+        ring.borderWidth = Theme.focusRingWidth
+        ring.cornerRadius = Theme.Radius.pane + ring.borderWidth
+        ring.frame = bounds.insetBy(dx: -ring.borderWidth, dy: -ring.borderWidth)
         ring.isHidden = !ringed
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = ringed ? 0.25 : 0
@@ -170,12 +211,24 @@ final class PaneCardView: NSView {
         CATransaction.commit()
     }
 
-    /// Gives keyboard focus to what the pane shows: its terminal, or the empty pane's New Shell Tab.
+    /// Gives keyboard focus to what the pane shows: its terminal or editor, or the empty pane's New Shell Tab.
     func focusContent() {
         if let host, host.superview === body {
             host.focus()
+        } else if let editor, editor.superview === body {
+            editor.focus()
         } else if !empty.isHidden {
             empty.focusDefault()
+        }
+    }
+
+    /// Close Pane from the header: a dirty file asks first (UX §4.2).
+    private func close() {
+        guard let model else { return }
+        guard let path = editor?.path else { return actions.closePane(model.paneId) }
+        Task {
+            guard await FileEditors.confirmClose(path: path, window: window) else { return }
+            actions.closePane(model.paneId)
         }
     }
 
@@ -207,6 +260,9 @@ final class PaneHeaderView: NSView {
 
     var onClose: (() -> Void)?
     var onStop: (() -> Void)?
+    /// A file picked in the recent-files pull-down, and Clear Recent Files (UX §6.1).
+    var onOpenRecent: ((String) -> Void)?
+    var onClearRecent: (() -> Void)?
 
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -218,10 +274,20 @@ final class PaneHeaderView: NSView {
     private let close = NSButton(
         image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane") ?? NSImage(),
         target: nil, action: nil)
+    private let recent = NSButton(
+        image: NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Recent Files") ?? NSImage(),
+        target: nil, action: nil)
     private let rule = NSView()
     private var isFocused = false
+    /// The file pane's path, recent files and dirty state.
+    private var filePath: String?
+    private var recentFiles: [String] = []
+    private var isDirty = false
     private var hovering = false {
-        didSet { updateCloseAlpha() }
+        didSet {
+            updateCloseAlpha()
+            updateCloseImage()
+        }
     }
     private var alwaysShowsClose = false
 
@@ -252,10 +318,19 @@ final class PaneHeaderView: NSView {
         close.action = #selector(closePressed)
         close.toolTip = "Close Pane (⌘W)"
         close.setAccessibilityLabel("Close Pane")
+        recent.bezelStyle = .accessoryBarAction
+        recent.isBordered = false
+        recent.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        recent.target = self
+        recent.action = #selector(recentPressed)
+        recent.toolTip = "Recent Files"
+        recent.setAccessibilityLabel("Recent Files")
+        recent.isHidden = true
         rule.wantsLayer = true
 
-        let leading = NSStackView(views: [icon, title, state, detail])
+        let leading = NSStackView(views: [icon, title, recent, state, detail])
         leading.spacing = 8
+        leading.setCustomSpacing(2, after: title)
         leading.setHuggingPriority(.defaultLow, for: .horizontal)
         let trailing = NSStackView(views: [branchIcon, meta, stop, close])
         trailing.spacing = 8
@@ -282,6 +357,8 @@ final class PaneHeaderView: NSView {
             rule.heightAnchor.constraint(equalToConstant: 1),
             close.widthAnchor.constraint(equalToConstant: 24),
             close.heightAnchor.constraint(equalToConstant: 24),
+            recent.widthAnchor.constraint(equalToConstant: 16),
+            recent.heightAnchor.constraint(equalToConstant: 20),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -319,6 +396,9 @@ final class PaneHeaderView: NSView {
             stop.setAccessibilityLabel("Stop \(tab.name)")
             setAccessibilityLabel("\(tab.name) header")
             alwaysShowsClose = false
+            recent.isHidden = true
+            filePath = nil
+            isDirty = false
         } else if let path = model.content.filePath {
             setAccessibilityIdentifier(AXID.paneHeader(path))
             icon.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
@@ -330,10 +410,77 @@ final class PaneHeaderView: NSView {
             stop.isHidden = true
             setAccessibilityLabel("\(title.stringValue) header")
             alwaysShowsClose = true
+            if filePath != path { isDirty = false }
+            filePath = path
+            recentFiles = model.recentFiles
+            recent.isHidden = model.recentFiles.isEmpty
+            recent.setAXIdentifier(AXID.paneRecent(model.paneId))
         }
+        updateCloseImage()
         updateCloseAlpha()
         applyColors()
     }
+
+    /// A file's dirty state and, for previews, the meta that replaces the folder ("1280 × 800 · 214 KB").
+    func updateFile(dirty: Bool, meta previewMeta: String?) {
+        guard let filePath else { return }
+        isDirty = dirty
+        if let previewMeta {
+            meta.stringValue = previewMeta
+            meta.toolTip = (filePath as NSString).abbreviatingWithTildeInPath
+        }
+        updateCloseImage()
+    }
+
+    /// While a file is dirty, Close shows a 6 pt dot that turns into `xmark` on hover, and says "edited"
+    /// (UX §6.1).
+    private func updateCloseImage() {
+        let name = filePath.map { ($0 as NSString).lastPathComponent }
+        if isDirty, let name {
+            close.image = hovering ? Self.xmark : Self.dirtyDot
+            close.setAccessibilityLabel("\(name), edited")
+            close.setAccessibilityValue("edited")
+        } else {
+            close.image = Self.xmark
+            close.setAccessibilityLabel("Close Pane")
+            close.setAccessibilityValue(nil)
+        }
+    }
+
+    private static let xmark = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Pane") ?? NSImage()
+    private static let dirtyDot = NSImage(size: NSSize(width: 6, height: 6), flipped: false) { rect in
+        Tokens.textBody.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        return true
+    }
+
+    /// The recent-files pull-down: "session.ts · backend/src/auth", newest first, a checkmark on the current
+    /// file, then Clear Recent Files.
+    @objc private func recentPressed() {
+        let menu = NSMenu()
+        for path in recentFiles.prefix(10) {
+            let folder = ((path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
+            let item = NSMenuItem(
+                title: "\((path as NSString).lastPathComponent) · \(folder)", action: #selector(recentPicked(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = path
+            item.state = path == filePath ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear Recent Files", action: #selector(clearPicked), keyEquivalent: "")
+        clear.target = self
+        menu.addItem(clear)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: recent.bounds.maxY + 4), in: recent)
+    }
+
+    @objc private func recentPicked(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String, path != filePath else { return }
+        onOpenRecent?(path)
+    }
+
+    @objc private func clearPicked() { onClearRecent?() }
 
     /// The state word of UX §4.1: nothing when idle.
     private static func stateWord(_ tab: TabSummary) -> (String, NSColor, String?) {
@@ -374,11 +521,12 @@ final class PaneHeaderView: NSView {
         title.textColor = Tokens.textPrimary
         detail.textColor = Tokens.textSecondary
         meta.textColor = Tokens.textSecondary
-        icon.contentTintColor = isFocused ? Tokens.rgb(0xC3CBDB) : Tokens.icon
+        icon.contentTintColor = isFocused ? Tokens.iconFocused : Tokens.icon
         branchIcon.contentTintColor = Tokens.textSecondary
         close.contentTintColor = Tokens.icon
+        recent.contentTintColor = Tokens.icon
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            rule.layer?.backgroundColor = Tokens.paneHairline.cgColor
+            rule.layer?.backgroundColor = Tokens.paneDivider.cgColor
         }
     }
 
@@ -520,7 +668,7 @@ private final class ExitBarView: NSView {
         restart.setAXIdentifier(AXID.paneRestart(tab.name))
         closeTab.setAXIdentifier(AXID.paneCloseTab(tab.name))
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            rule.layer?.backgroundColor = Tokens.paneHairline.cgColor
+            rule.layer?.backgroundColor = Tokens.paneDivider.cgColor
         }
     }
 

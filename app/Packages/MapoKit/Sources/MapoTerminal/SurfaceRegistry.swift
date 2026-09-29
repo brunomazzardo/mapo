@@ -3,7 +3,8 @@ import AppKit
 /// Terminal bodies by tab id. A body lives until its tab closes, so re-layout, pane moves and zoom
 /// re-host the same view instead of building a new surface (PLAN T0.8).
 public final class SurfaceRegistry {
-    public let settings: TerminalSettings
+    /// The launch settings, with the font size View › Bigger and Smaller set (UX §8).
+    public private(set) var settings: TerminalSettings
     private let launch: (_ tabId: String) -> TerminalLaunch
     private let identifiers: TerminalIdentifiers
     private var hosts: [String: TerminalHostView] = [:]
@@ -85,6 +86,14 @@ public final class SurfaceRegistry {
                     host?.suspend()
                 }
             }
+        }
+    }
+
+    /// View › Bigger, Smaller and Actual Size (UX §8): every terminal, now and later, in memory only.
+    public func setFontSize(_ size: Double) {
+        settings.fontSize = size
+        for host in hosts.values {
+            (host.surface as? SwiftTermSurfaceView)?.setFontSize(size)
         }
     }
 

@@ -181,6 +181,7 @@ impl CoreHandle {
                 | methods::PANE_FOCUS
                 | methods::PANE_RESIZE
                 | methods::PANE_EQUALIZE
+                | methods::PANE_CLEAR_RECENT
                 | methods::TAB_RESTART
                 | methods::UI_VISIBILITY
                 | methods::WORKSPACE_MOVE
@@ -580,7 +581,10 @@ impl Core {
             | methods::PANE_CLOSE
             | methods::PANE_FOCUS
             | methods::PANE_RESIZE
-            | methods::PANE_EQUALIZE => self.pane_call(method, params, caller),
+            | methods::PANE_EQUALIZE
+            | methods::PANE_CLEAR_RECENT => self.pane_call(method, params, caller),
+            // Not in `handles`: the daemon checks the path first (crates/mapo/src/daemon/file.rs).
+            methods::FILE_OPEN => self.file_open(parse_params(params)?, caller),
             other => Err(RpcError::invalid(format!("unknown method {other}"))),
         }
     }

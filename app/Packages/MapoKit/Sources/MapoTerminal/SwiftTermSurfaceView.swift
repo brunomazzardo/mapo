@@ -152,6 +152,11 @@ public final class SwiftTermSurfaceView: LocalProcessTerminalView, TerminalSurfa
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
+    /// View › Bigger and Smaller (UX §8): the same family at `size`; the grid and the PTY follow.
+    public func setFontSize(_ size: Double) {
+        font = NSFont(descriptor: font.fontDescriptor, size: CGFloat(size)) ?? font
+    }
+
     // MARK: SwiftTerm callbacks
 
     public override func bell(source: Terminal) {

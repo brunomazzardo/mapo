@@ -59,3 +59,14 @@ import Testing
     #expect(SwiftTermSurfaceView.exitCode(fromWaitStatus: 0) == 0)
     #expect(SwiftTermSurfaceView.exitCode(fromWaitStatus: 9) == 137)
 }
+
+@Test @MainActor func darkThemeAsGhosttyConfig() {
+    let lines = TerminalTheme.dark.ghosttyConfig.split(separator: "\n").map(String.init)
+    #expect(
+        Array(lines.prefix(6)) == [
+            "background = #1D1F25", "foreground = #D5D8DF", "cursor-color = #D5D8DF",
+            "selection-background = #35415C", "palette = 0=#2B2E36", "palette = 1=#F47067",
+        ])
+    #expect(lines.contains("palette = 15=#F2F3F6"))
+    #expect(lines.last == "window-padding-color = background")
+}

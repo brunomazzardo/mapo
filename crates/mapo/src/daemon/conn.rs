@@ -464,6 +464,9 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
     if req.method == super::fs::FS_LIST {
         return super::fs::list(shared, &req).await;
     }
+    if req.method == methods::FILE_OPEN {
+        return super::file::open(shared, session, &req).await;
+    }
     if req.method.starts_with("ui.") || req.method.starts_with("explorer.") {
         // Driving the UI is the operator's: a tab token must not type into whatever has focus.
         if session.caller.kind != CredentialKind::App {

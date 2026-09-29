@@ -1,7 +1,8 @@
 import AppKit
 
-/// The window's three columns (UX §2, §2.2): the rail as the sidebar item, which gives it Liquid Glass,
-/// the panes area as the content item, and the inspector item, collapsed at first. Widths and collapsed
+/// The window's three columns (UX §2, §2.2): the rail as the sidebar item and the inspector as the inspector
+/// item, both of which give their content system Liquid Glass (UX §2.3), and the panes area as the content
+/// item, over the window backdrop. The inspector is collapsed at first. Widths and collapsed
 /// states autosave per instance as `split-<instance>`.
 public final class MainSplitViewController: NSSplitViewController {
     private let rail: NSViewController
@@ -42,8 +43,31 @@ public final class MainSplitViewController: NSSplitViewController {
         inspectorItem.canCollapseFromWindowResize = true
         inspectorItem.isCollapsed = true
 
+        // The backdrop is a plain subview under the three items, so the split view must lay out only the
+        // items' views.
+        splitView.arrangesAllSubviews = false
         for item in [railItem, panesItem, inspectorItem] { addSplitViewItem(item) }
         splitView.autosaveName = "split-\(instance)"
+        installBackdrop()
+        if Theme.forcesOpaqueGlass {
+            for side in [rail.view, inspector.view] { Self.addOpaqueGlass(to: side) }
+        }
+    }
+
+    /// The window backdrop (UX §2, §9.1) at the bottom of the content view, under the rail, the panes and
+    /// the inspector, so it shows through the toolbar band, the pane gutters and the glass.
+    private func installBackdrop() {
+        let backdrop = BackdropView(frame: splitView.bounds)
+        backdrop.autoresizingMask = [.width, .height]
+        splitView.addSubview(backdrop, positioned: .below, relativeTo: nil)
+    }
+
+    /// Reduce Transparency forced on by `[ui] reduce-transparency = "on"`: macOS only makes the system glass
+    /// opaque for its own setting, so the rail and inspector get the `glassOpaque` fill (UX §9.4).
+    private static func addOpaqueGlass(to view: NSView) {
+        let fill = OpaqueGlassView(frame: view.bounds)
+        fill.autoresizingMask = [.width, .height]
+        view.addSubview(fill, positioned: .below, relativeTo: nil)
     }
 
     // While the window is occluded, AppKit's animated collapse never completes, so ⌃⌘S and ⌥⌘0 would do

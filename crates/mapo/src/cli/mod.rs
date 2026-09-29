@@ -3,6 +3,7 @@
 mod attach;
 mod debug;
 mod explorer;
+mod file;
 mod instance;
 mod pane;
 mod state;
@@ -60,6 +61,9 @@ pub enum Command {
         #[arg(long = "type")]
         types: Vec<String>,
     },
+    /// Open a file in the workspace's file pane.
+    #[command(subcommand)]
+    File(file::FileCommand),
     /// Refresh or collapse the app's Files inspector.
     #[command(subcommand)]
     Explorer(explorer::ExplorerCommand),
@@ -102,6 +106,7 @@ impl Cli {
             } => state::events(self, *follow, *after, types),
             Command::Ui(cmd) => ui::run(self, cmd),
             Command::Explorer(cmd) => explorer::run(self, cmd),
+            Command::File(cmd) => file::run(self, cmd),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
             Command::Daemon { foreground } => {

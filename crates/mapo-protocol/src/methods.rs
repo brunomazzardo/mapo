@@ -33,3 +33,5 @@ pub const PANE_CLOSE: &str = "pane.close";
 pub const PANE_FOCUS: &str = "pane.focus";
 pub const PANE_RESIZE: &str = "pane.resize";
 pub const PANE_EQUALIZE: &str = "pane.equalize";
+pub const PANE_CLEAR_RECENT: &str = "pane.clearRecent";
+pub const FILE_OPEN: &str = "file.open";

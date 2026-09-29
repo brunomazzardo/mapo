@@ -6,7 +6,7 @@ import MapoUI
 
 /// Owns the app lifecycle (PLAN T0.7 steps 1 and 5): resolves the instance through the bundled `mapo`,
 /// writes the app pid file, opens the window and starts the daemon connection.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, MapoCommandActions {
     private let options = LaunchOptions(arguments: CommandLine.arguments)
     private let log = MapoLog.shared
     private var client: MapoClient?
@@ -24,6 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// Unsaved files ask first (UX §6.2).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        FileEditors.shouldTerminate(window: windowController?.window)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -65,12 +70,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let registry = SurfaceRegistry(
             settings: TerminalSettings(instanceDirectory: info.dataDirectory), instance: info.name,
             identifiers: AXID.terminal)
+        FileEditors.configure(dataDirectory: info.dataDirectory)
         let metrics = UIMetrics(store: client.store) { [weak self] in self?.windowController?.window }
         let windowController = MainWindowController(client: client, registry: registry, metrics: metrics)
         // `ui.*` from the daemon (PLAN T0.9); set before connecting so `app.register` offers `ui`.
         let automation = AutomationServer(store: client.store, metrics: metrics) { [weak windowController] in
             windowController?.window
         }
+        automation.snapshotModel = { [weak windowController] in windowController?.automationModel() ?? [:] }
         client.requestHandler = { [weak windowController] request in
             if request.method.hasPrefix("explorer."), let windowController {
                 return await windowController.inspector.handleExplorer(request)
@@ -110,45 +117,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    // MARK: Menu actions (UX §8)
+    // MARK: Menu actions (UX §8), from `CommandTable`
 
-    @objc func newWorkspace(_ sender: Any?) {
-        windowController?.newWorkspace()
-    }
-
-    @objc func newShellTab(_ sender: Any?) {
-        windowController?.newShellTab()
-    }
-
+    @objc func openSettings(_ sender: Any?) { windowController?.openSettings() }
+    @objc func newWorkspace(_ sender: Any?) { windowController?.newWorkspace() }
+    @objc func newShellTab(_ sender: Any?) { windowController?.newShellTab() }
+    /// M2; the item stays disabled.
+    @objc func newAgentTab(_ sender: Any?) { NSSound.beep() }
+    @objc func newTabInFolder(_ sender: Any?) { windowController?.newTabInFolder() }
+    @objc func showFiles(_ sender: Any?) { windowController?.showInspector(.files) }
+    @objc func showChanges(_ sender: Any?) { windowController?.showInspector(.changes) }
+    @objc func togglePalette(_ sender: Any?) { windowController?.togglePalette() }
+    @objc func biggerFont(_ sender: Any?) { windowController?.changeFontSize(by: 1) }
+    @objc func smallerFont(_ sender: Any?) { windowController?.changeFontSize(by: -1) }
+    @objc func actualSizeFont(_ sender: Any?) { windowController?.changeFontSize(by: nil) }
+    @objc func previousWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: -1) }
+    @objc func nextWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: 1) }
+    @objc func renameWorkspace(_ sender: Any?) { windowController?.renameActiveWorkspace() }
+    /// M2; the item stays disabled.
+    @objc func setAgentCommand(_ sender: Any?) { NSSound.beep() }
+    @objc func moveWorkspaceUp(_ sender: Any?) { windowController?.moveActiveWorkspace(by: -1) }
+    @objc func moveWorkspaceDown(_ sender: Any?) { windowController?.moveActiveWorkspace(by: 1) }
+    @objc func deleteWorkspace(_ sender: Any?) { windowController?.deleteActiveWorkspace() }
+    /// M2; the item stays disabled.
+    @objc func nextTabNeedingYou(_ sender: Any?) { NSSound.beep() }
+    @objc func previousTab(_ sender: Any?) { windowController?.switchTab(by: -1) }
+    @objc func nextTab(_ sender: Any?) { windowController?.switchTab(by: 1) }
+    @objc func goToTab(_ sender: Any?) { windowController?.goToTab((sender as? NSMenuItem)?.tag ?? 0) }
+    @objc func renameTab(_ sender: Any?) { windowController?.renameFocusedTab() }
+    /// M2; the item stays disabled.
+    @objc func interruptAgent(_ sender: Any?) { NSSound.beep() }
+    @objc func stopCommand(_ sender: Any?) { windowController?.stopCommand() }
+    @objc func closeTab(_ sender: Any?) { windowController?.closeFocusedTab() }
     @objc func splitRight(_ sender: Any?) { windowController?.splitPane("right") }
     @objc func splitDown(_ sender: Any?) { windowController?.splitPane("down") }
-    @objc func closePane(_ sender: Any?) { windowController?.closePane() }
-    @objc func closeTab(_ sender: Any?) { windowController?.closeFocusedTab() }
     @objc func focusPaneLeft(_ sender: Any?) { windowController?.focusPane("left") }
     @objc func focusPaneRight(_ sender: Any?) { windowController?.focusPane("right") }
     @objc func focusPaneUp(_ sender: Any?) { windowController?.focusPane("up") }
     @objc func focusPaneDown(_ sender: Any?) { windowController?.focusPane("down") }
     @objc func equalizePanes(_ sender: Any?) { windowController?.equalizePanes() }
-    @objc func stopCommand(_ sender: Any?) { windowController?.stopCommand() }
-    @objc func previousWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: -1) }
-    @objc func nextWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: 1) }
+    @objc func closePane(_ sender: Any?) { windowController?.closePane() }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        let connected = windowController?.isConnected ?? false
-        switch menuItem.action {
-        case #selector(splitRight(_:)), #selector(splitDown(_:)), #selector(closePane(_:)),
-            #selector(focusPaneLeft(_:)), #selector(focusPaneRight(_:)), #selector(focusPaneUp(_:)),
-            #selector(focusPaneDown(_:)), #selector(equalizePanes(_:)), #selector(previousWorkspace(_:)),
-            #selector(nextWorkspace(_:)):
-            return connected && (windowController?.hasActiveWorkspace ?? false)
-        case #selector(closeTab(_:)):
-            return connected && (windowController?.hasFocusedTab ?? false)
-        case #selector(stopCommand(_:)):
-            return connected && (windowController?.focusedTabIsRunning ?? false)
-        case #selector(newWorkspace(_:)), #selector(newShellTab(_:)):
-            return connected
-        default:
-            return true
-        }
+        windowController?.validate(menuItem) ?? false
     }
 }

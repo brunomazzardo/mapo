@@ -21,6 +21,18 @@ public enum AXID {
     public static let dialog = "dialog"
     public static let dialogConfirm = "dialog.confirm"
     public static let dialogCancel = "dialog.cancel"
+    /// Don't Save in the unsaved-file sheets (UX §4.2, §6.2).
+    public static let dialogDiscard = "dialog.discard"
+    /// A sheet's text field, such as New Tab in Folder's path (UX §3.5).
+    public static let dialogField = "dialog.field"
+    /// The ⌘K palette (UX §10): its panel, its field, and `palette.row:<index>`.
+    public static let palette = "palette"
+    public static let paletteField = "palette.field"
+
+    /// `palette.row:<index>`, zero-based in display order, headers skipped.
+    public static func paletteRow(_ index: Int) -> String {
+        "palette.row:\(index)"
+    }
 
     /// `rail.workspace:<workspaceName>`.
     public static func railWorkspace(_ workspaceName: String) -> String {
@@ -76,6 +88,11 @@ public enum AXID {
     /// `pane.close:<paneId>`.
     public static func paneClose(_ paneId: String) -> String {
         "pane.close:\(paneId)"
+    }
+
+    /// `pane.recent:<paneId>`: the file pane's recent-files pull-down (UX §6.1).
+    public static func paneRecent(_ paneId: String) -> String {
+        "pane.recent:\(paneId)"
     }
 
     /// `pane.stop:<tabName>`.

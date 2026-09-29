@@ -268,7 +268,7 @@ Claude -> hook command -> `mapo hook` (reads the hook JSON on stdin, adds MAPO_T
   [attention] # notify = ["needs-you","failed","done"], done-threshold-seconds = 30
   [files]     # exclude = [".DS_Store", "node_modules"], respect-gitignore = true
   [changes]   # warn-lines = 1500, warn-files = 50
-  [ui]        # theme = "mapo-glass", rail-width = 280, inspector-width = 300
+  [ui]        # theme = "mapo-glass", appearance = "system", reduce-transparency = "system", rail-width = 280, inspector-width = 300
   ```
 - Editor recovery copies go in `recovery/`. Logs go in `logs/` (daily files, 7 kept).
 

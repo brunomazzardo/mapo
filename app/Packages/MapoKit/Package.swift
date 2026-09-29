@@ -28,7 +28,7 @@ let package = Package(
             swiftSettings: mainActorDefault),
         .target(name: "MapoEditor", dependencies: ["MapoProtocol"], swiftSettings: mainActorDefault),
         .target(
-            name: "MapoUI", dependencies: ["MapoProtocol", "MapoClient", "MapoTerminal"],
+            name: "MapoUI", dependencies: ["MapoProtocol", "MapoClient", "MapoTerminal", "MapoEditor"],
             swiftSettings: mainActorDefault),
         .target(
             name: "MapoAutomation", dependencies: ["MapoProtocol", "MapoClient", "MapoUI"],
@@ -36,5 +36,6 @@ let package = Package(
         .testTarget(name: "MapoProtocolTests", dependencies: ["MapoProtocol"]),
         .testTarget(name: "MapoTerminalTests", dependencies: ["MapoTerminal"]),
         .testTarget(name: "MapoAutomationTests", dependencies: ["MapoAutomation"]),
+        .testTarget(name: "MapoEditorTests", dependencies: ["MapoEditor"]),
     ]
 )

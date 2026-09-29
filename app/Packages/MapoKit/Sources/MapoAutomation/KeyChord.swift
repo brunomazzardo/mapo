@@ -117,6 +117,12 @@ nonisolated enum USKeyboard {
         "~": "`",
     ]
 
+    /// Whether `text` is one character that the US layout types with shift, such as "}" or "+".
+    static func isShiftedSymbol(_ text: String) -> Bool {
+        guard text.count == 1, let character = text.first else { return false }
+        return shifted[character] != nil
+    }
+
     private static let functionKeyCodes: [UInt16] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111]
 
     /// The key that types `character`, with shift when needed; nil outside the US layout.

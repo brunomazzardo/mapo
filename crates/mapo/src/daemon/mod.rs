@@ -3,6 +3,7 @@
 
 mod attach;
 mod conn;
+mod file;
 mod fs;
 mod host;
 mod logging;

@@ -1,0 +1,4 @@
+# task-t1-9: light, Reduce Transparency from the system (PLAN T1.9)
+[ui]
+appearance = "light"
+reduce-transparency = "system"

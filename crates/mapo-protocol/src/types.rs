@@ -369,6 +369,18 @@ pub struct PaneSplit {
     pub content: Option<SplitContent>,
 }
 
+/// `file.open` (PROTOCOL §6.5): an existing regular file, shown in the workspace's file pane.
+/// `beside: false` puts it in the focused pane instead of splitting when there is no file pane.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FileOpen {
+    pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub beside: Option<bool>,
+}
+
 /// `pane.focus`: a pane id, or a direction from the focused pane.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

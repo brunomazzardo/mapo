@@ -11,6 +11,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let instance: String
     private let metrics: UIMetrics
     private var paneArea: PaneAreaViewController?
+    private var rail: RailViewController?
+    /// The ⌘K palette (UX §10).
+    private var palette: PaletteController?
+    private let registry: SurfaceRegistry
+    /// `[terminal] font-size` at launch; Actual Size (⌘0) returns to it.
+    private let baseFontSize: Double
+    /// The terminals' font size now: Bigger and Smaller step it by 1 pt from 9 to 24, not saved (UX §8).
+    private var fontSize: Double
     /// Serves `explorer.*` (PROTOCOL §6.5).
     let inspector: InspectorViewController
 
@@ -23,6 +31,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         self.client = client
         self.instance = client.store.instance
         self.metrics = metrics
+        self.registry = registry
+        self.baseFontSize = registry.settings.fontSize
+        self.fontSize = registry.settings.fontSize
+        // `[ui]` appearance and Reduce Transparency, before any view resolves a color (UX §9, PLAN T1.9).
+        Theme.apply(AppearanceSettings(instanceDirectory: client.configuration.instance.dataDirectory))
         self.inspector = InspectorViewController(client: client)
         let window = MapoWindow()
         super.init(window: window)
@@ -42,6 +55,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                     }
                 },
                 newWorkspace: { [weak self] in self?.newWorkspace() }))
+        self.rail = rail
         let panes = PaneAreaViewController(
             store: client.store, registry: registry,
             actions: PaneAreaActions(
@@ -53,7 +67,22 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                     self?.reportVisibility(keyWindow: key, visibleTabIds: visible, focusedTabId: focused)
                 }))
         paneArea = panes
-        window.onLeftMouseDown = { [weak panes] event in panes?.windowMouseDown(event) }
+        palette = PaletteController(
+            store: client.store,
+            actions: PaletteActions(
+                focusTab: { [weak self] id in self?.focusTab(id) },
+                showTabToTheRight: { [weak self] id in
+                    self?.run("Show to the Right") { try await $0.showTab(id: id, direction: "right") }
+                },
+                activateWorkspace: { [weak self] id in self?.activateWorkspace(id) },
+                openFile: { [weak self] path in self?.openFile(path) },
+                perform: { [weak self] command in self?.perform(command) },
+                isEnabled: { [weak self] command in self?.isEnabled(command) ?? false }))
+        // A click outside the palette closes it (UX §10); clicks inside it go to its own panel.
+        window.onLeftMouseDown = { [weak self, weak panes] event in
+            self?.palette?.close()
+            panes?.windowMouseDown(event)
+        }
         window.contentViewController = MainSplitViewController(
             rail: rail, panes: panes, inspector: inspector, instance: instance)
 
@@ -172,7 +201,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         guard let current = workspaces.firstIndex(where: { $0.id == client.store.activeWorkspaceId }),
             workspaces.indices.contains(current + offset)
         else { return NSSound.beep() }
-        let id = workspaces[current + offset].id
+        activateWorkspace(workspaces[current + offset].id)
+    }
+
+    /// Makes a workspace active and moves keyboard focus into its focused pane.
+    private func activateWorkspace(_ id: String) {
         metrics.beginWorkspaceSwitch(to: id)
         paneArea?.expectFocusChange()
         run("workspace.activate") { try await $0.activateWorkspace(id: id) }
@@ -208,6 +241,251 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 NSSound.beep()
             }
         }
+    }
+
+    // MARK: Palette, view and menu commands (UX §8, §10)
+
+    /// ⌘K opens or closes the palette over the panes area.
+    func togglePalette() {
+        guard let window, let palette else { return }
+        palette.toggle(in: window, over: paneArea?.view)
+        if palette.isOpen { metrics.begin(.paletteOpen) { true } }
+    }
+
+    /// Focuses a tab, in any workspace, and gives its pane keyboard focus.
+    private func focusTab(_ id: String) {
+        metrics.beginTabFocus(id)
+        paneArea?.expectFocusChange()
+        run("tab.focus") { [weak self] client in
+            try await client.focusTab(id: id)
+            self?.paneArea?.focusTerminal()
+        }
+    }
+
+    /// `file.open`: the file in a file pane (UX §6).
+    private func openFile(_ path: String) {
+        run("file.open") { _ = try await $0.openFile(path: path) }
+    }
+
+    /// Settings… (⌘,) opens this instance's `config.toml` in a file pane, first creating it with the keys
+    /// as comments (D-30).
+    func openSettings() {
+        let url = client.configuration.instance.dataDirectory.appending(component: "config.toml")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try Self.configTemplate.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                MapoLog.shared.warn("can't create \(url.path): \(error)")
+                return NSSound.beep()
+            }
+        }
+        openFile(url.path)
+    }
+
+    private static let configTemplate = """
+        # Mapo settings for this instance. Uncomment a line to change it.
+
+        [terminal]
+        # font-family = "SF Mono"
+        # font-size = 12.5
+        # option-as-alt = false
+
+        [ui]
+        # appearance = "system"
+
+        """
+
+    /// New Tab in Folder… (⌥⌘T): the folder sheet, then a shell there in the focused pane.
+    func newTabInFolder() {
+        guard let window else { return }
+        let folder = focusedTab?.cwd ?? NSHomeDirectory()
+        Task {
+            guard let path = await FolderSheet.choose(on: window, initialFolder: folder) else { return }
+            metrics.beginTabCreate()
+            paneArea?.expectFocusChange()
+            run("New Tab in Folder") { client in
+                _ = try await client.call(
+                    Method.tabCreate, TabCreateParams(kind: "shell", cwd: path, placement: "focused", focus: true),
+                    as: TabSummary.self)
+            }
+        }
+    }
+
+    /// Bigger (+1), Smaller (-1), or Actual Size (nil): every terminal, 9 to 24 pt.
+    func changeFontSize(by step: Double?) {
+        let size = step.map { min(24, max(9, fontSize + $0)) } ?? baseFontSize
+        guard size != fontSize else { return }
+        fontSize = size
+        registry.setFontSize(size)
+    }
+
+    /// Show Files and Show Changes select the segment and open a hidden inspector.
+    func showInspector(_ segment: InspectorViewController.Segment) {
+        inspector.select(segment)
+        guard let split = window?.contentViewController as? NSSplitViewController,
+            split.splitViewItems.last?.isCollapsed == true
+        else { return }
+        split.toggleInspector(nil)
+    }
+
+    /// Renaming happens in the rail, which opens if hidden (UX §8).
+    private func showRail() {
+        guard let split = window?.contentViewController as? NSSplitViewController,
+            split.splitViewItems.first?.isCollapsed == true
+        else { return }
+        split.toggleSidebar(nil)
+        window?.layoutIfNeeded()
+    }
+
+    /// Rename Tab (⌥⌘R): the focused tab's rail row turns into `rail.rename`.
+    func renameFocusedTab() {
+        guard let tab = focusedTab else { return NSSound.beep() }
+        showRail()
+        rail?.beginRename(tabId: tab.id)
+    }
+
+    func renameActiveWorkspace() {
+        guard let id = client.store.activeWorkspaceId else { return NSSound.beep() }
+        showRail()
+        rail?.beginRename(workspaceId: id)
+    }
+
+    /// Move Workspace Up (-1) or Down (+1) in the rail.
+    func moveActiveWorkspace(by offset: Int) {
+        let workspaces = client.store.workspaces
+        guard let index = workspaces.firstIndex(where: { $0.id == client.store.activeWorkspaceId }),
+            workspaces.indices.contains(index + offset)
+        else { return NSSound.beep() }
+        let id = workspaces[index].id
+        run("workspace.move") { try await $0.moveWorkspace(id: id, to: index + offset) }
+    }
+
+    /// Delete Workspace, with the rail's confirmation (UX §3.5).
+    func deleteActiveWorkspace() {
+        guard let id = client.store.activeWorkspaceId else { return NSSound.beep() }
+        rail?.deleteWorkspace(id: id)
+    }
+
+    /// The active workspace's tabs in rail order.
+    private var activeTabs: [TabSummary] {
+        client.store.activeWorkspaceId.map { client.store.tabs(inWorkspace: $0) } ?? []
+    }
+
+    /// Previous Tab (-1) and Next Tab (+1): rail order within the workspace, wrapping.
+    func switchTab(by offset: Int) {
+        let tabs = activeTabs
+        guard tabs.count > 1, let current = tabs.firstIndex(where: { $0.id == focusedTab?.id }) else {
+            return NSSound.beep()
+        }
+        focusTab(tabs[(current + offset + tabs.count) % tabs.count].id)
+    }
+
+    /// Go to Tab N (⌘1 to ⌘9).
+    func goToTab(_ number: Int) {
+        let tabs = activeTabs
+        guard tabs.indices.contains(number - 1) else { return NSSound.beep() }
+        focusTab(tabs[number - 1].id)
+    }
+
+    // MARK: Command table plumbing (T1.8)
+
+    /// Runs a table command from the palette the way its menu item would.
+    private func perform(_ command: Command) {
+        guard let target = target(for: command) else { return NSSound.beep() }
+        NSApp.sendAction(command.action, to: target, from: menuItem(for: command))
+    }
+
+    /// Whether the palette lists a command: its feature exists and its target validates it now.
+    private func isEnabled(_ command: Command) -> Bool {
+        guard command.milestone == nil, let target = target(for: command) else { return false }
+        let item = menuItem(for: command)
+        if let validator = target as? NSMenuItemValidation { return validator.validateMenuItem(item) }
+        if let validator = target as? NSUserInterfaceValidations { return validator.validateUserInterfaceItem(item) }
+        return true
+    }
+
+    private func menuItem(for command: Command) -> NSMenuItem {
+        let item = NSMenuItem(title: command.title, action: command.action, keyEquivalent: "")
+        item.tag = command.tag
+        return item
+    }
+
+    /// Where a command goes, as if the main window were key (the palette has just closed, or the app is
+    /// inactive while a drive runs it): editor actions to a text view's chain, others along the first
+    /// responder's chain preferring a controller (NSSplitView answers the toggles but only acts while key),
+    /// then the split view controller and the app delegate.
+    private func target(for command: Command) -> AnyObject? {
+        let action = command.action
+        let chain = sequence(first: window?.firstResponder, next: { $0?.nextResponder }).compactMap { $0 }
+        if command.method == "editor" {
+            guard chain.contains(where: { ($0 as? NSTextView)?.isFieldEditor == false }) else { return nil }
+            return chain.first { $0.responds(to: action) }
+        }
+        let handlers = chain.filter { $0.responds(to: action) }
+        if let controller = handlers.first(where: { $0 is NSViewController || $0 is NSWindowController }) {
+            return controller
+        }
+        if let handler = handlers.first { return handler }
+        if let split = window?.contentViewController, split.responds(to: action) { return split }
+        if let delegate = NSApp.delegate, delegate.responds(to: action) { return delegate }
+        return nil
+    }
+
+    /// Enables the Mapo items of the menu bar (UX §8). Items of later milestones stay disabled.
+    func validate(_ item: NSMenuItem) -> Bool {
+        guard let action = item.action, !CommandTable.isLater(action) else { return false }
+        let store = client.store
+        let connected = store.isConnected
+        let workspaces = store.workspaces
+        let active = workspaces.firstIndex { $0.id == store.activeWorkspaceId }
+        typealias A = MapoCommandActions
+        switch action {
+        case #selector(A.togglePalette(_:)), #selector(A.showFiles(_:)), #selector(A.showChanges(_:)):
+            return true
+        case #selector(A.biggerFont(_:)):
+            return fontSize < 24
+        case #selector(A.smallerFont(_:)):
+            return fontSize > 9
+        case #selector(A.actualSizeFont(_:)):
+            return fontSize != baseFontSize
+        case #selector(A.openSettings(_:)), #selector(A.newWorkspace(_:)), #selector(A.newShellTab(_:)):
+            return connected
+        case #selector(A.moveWorkspaceUp(_:)):
+            return connected && (active ?? 0) > 0
+        case #selector(A.moveWorkspaceDown(_:)):
+            return connected && active.map { $0 < workspaces.count - 1 } ?? false
+        case #selector(A.previousTab(_:)), #selector(A.nextTab(_:)):
+            return connected && activeTabs.count > 1
+        case #selector(A.goToTab(_:)):
+            let tabs = activeTabs
+            let tab = tabs.indices.contains(item.tag - 1) ? tabs[item.tag - 1] : nil
+            // "1  be-claude" (UX §8).
+            item.title =
+                tab.map { "\(item.tag)  \($0.labeled || $0.title.isEmpty ? $0.name : $0.title)" } ?? "Tab \(item.tag)"
+            return connected && tab != nil
+        case #selector(A.renameTab(_:)), #selector(A.closeTab(_:)):
+            return connected && focusedTab != nil
+        case #selector(A.stopCommand(_:)):
+            return connected && focusedTab?.state == .running
+        default:
+            // Workspace, pane and New Tab in Folder commands need an active workspace.
+            return connected && active != nil
+        }
+    }
+
+    /// `ui.snapshot` model fields for drives (ENGINEERING §4.4): `view`, the view-only state the menus
+    /// change, and `commands`, the command table the `task-t1-8` drive walks.
+    func automationModel() -> [String: JSONValue] {
+        let split = window?.contentViewController as? NSSplitViewController
+        let view: [String: JSONValue] = [
+            "fontSize": .number(fontSize),
+            "sidebar": .bool(split?.splitViewItems.first?.isCollapsed == false),
+            "inspector": .bool(split?.splitViewItems.last?.isCollapsed == false),
+            "inspectorSegment": .string(inspector.segment.rawValue),
+            "palette": .bool(palette?.isOpen ?? false),
+        ]
+        let commands = CommandTable.checklist.map { JSONValue.object($0.mapValues(JSONValue.string)) }
+        return ["view": .object(view), "commands": .array(commands)]
     }
 
     // MARK: NSToolbarDelegate

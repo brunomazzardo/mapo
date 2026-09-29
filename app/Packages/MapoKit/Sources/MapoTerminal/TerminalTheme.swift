@@ -1,6 +1,7 @@
 import AppKit
 
-/// The Mapo Glass terminal palette (UX §9.1), one per appearance.
+/// The Mapo Glass terminal palette (UX §9.1), one per appearance. The surface re-applies it when its
+/// effective appearance changes, so it follows `[ui] appearance` and the system.
 struct TerminalTheme {
     var background: NSColor
     var foreground: NSColor
@@ -23,6 +24,20 @@ struct TerminalTheme {
             0x5E6470, 0xD0453D, 0x1F8F52, 0xA86E00, 0x2F6BE0, 0x9160E0, 0x13897B, 0x9A9FAA,
         ])
 
+    /// The theme as libghostty `ghostty.conf` lines (UX §4.1, §9.1), for the ghostty engine once GhosttyKit
+    /// links (PLAN T0.8); SwiftTerm reads the fields directly. Includes the pane's window padding.
+    var ghosttyConfig: String {
+        var lines = [
+            "background = \(Self.hex(background))",
+            "foreground = \(Self.hex(foreground))",
+            "cursor-color = \(Self.hex(cursor))",
+            "selection-background = \(Self.hex(selection))",
+        ]
+        lines += ansi.enumerated().map { "palette = \($0.offset)=\(Self.hex($0.element))" }
+        lines += ["window-padding-x = 14", "window-padding-y = 12", "window-padding-color = background"]
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     static func forAppearance(_ appearance: NSAppearance) -> TerminalTheme {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
     }
@@ -31,5 +46,15 @@ struct TerminalTheme {
         NSColor(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
             blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+    }
+
+    private static func hex(_ value: UInt32) -> String {
+        String(format: "#%06X", value & 0xFF_FFFF)
+    }
+
+    private static func hex(_ color: NSColor) -> String {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        let channel = { (value: CGFloat) in UInt32((value * 255).rounded()) & 0xFF }
+        return hex(channel(srgb.redComponent) << 16 | channel(srgb.greenComponent) << 8 | channel(srgb.blueComponent))
     }
 }

@@ -34,6 +34,16 @@ mapo ui key cmd+s >/dev/null
 for _ in {1..40}; do grep -q 'let answer = 42' "$D/a.swift" && break; sleep 0.05; done
 grep -c 'let answer = 42' "$D/a.swift" | jq -R '{n: tonumber}' | expect_json .n 1
 
+step "Escape from Find and Go to Line keeps focus in the editor, not the terminal beside it"
+sleep 2.1 # past the window in which a command's focus change is still expected
+for key in cmd+f cmd+l; do
+  mapo ui key $key >/dev/null
+  sleep 0.3
+  mapo ui key escape >/dev/null
+  sleep 0.4
+  focused | jq -R . | expect_json . "\"editor:$D/a.swift\""
+done
+
 step "Folders and broken links are rejected before any UI change"
 B=$(mapo rpc layout.get)
 rc=0; mapo file open "$D" 2>/dev/null >/dev/null || rc=$?

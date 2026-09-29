@@ -12,7 +12,7 @@ Summary: M0, M1, M2 (synthetic path), M3 (without real Claude) and M4 are built,
 | Area | Status | Gate or drive | Notes |
 |---|---|---|---|
 | M0: daemon, instances, PTY tabs, zsh integration, `mapo attach`, app skeleton, `mapo ui` | done | m0-skeleton PASS 17/17 | The terminal engine is SwiftTerm, the documented fallback: GhosttyKit acquisition was refused |
-| M1: S2 rail, status, tiling panes, switching, Files, editor, ⌘K, keymap table, Mapo Glass | done | m1-daily PASS 16/16; task-t1-1..9 PASS | Find and Go to Line focus is still open |
+| M1: S2 rail, status, tiling panes, switching, Files, editor, ⌘K, keymap table, Mapo Glass | done | m1-daily PASS 16/16; task-t1-1..9 PASS | Find and Go to Line focus fixed at 04:20 |
 | M2: plugin, `mapo hook`, agent status machine, agent tabs, interrupt, resume, attention | done on the synthetic path | m2-agents PASS 27/27; task-t2-2, task-t2-4 PASS | No real Claude was run |
 | M3: activity log, `tab ask`, `events.wait`, `mapo mcp` (32 tools), skill | done, except the full T3.1 walk | m3-control PASS 9/9; task-t3-5 PASS | `tab ask` verified synthetically only |
 | M4: server detection, ports and stop, Changes, diff, gutter | done | m4-servers-changes PASS 27/27 | |
@@ -41,7 +41,6 @@ See the Deviations table below. The main ones:
 - `strip = "none"` in the release profile (Xcode 27's `strip` corrupts proc-macro dylibs).
 
 ### Blockers
-- ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing the find bar leaves focus on the terminal pane. Isolated at 04:11: Escape in the editor itself keeps focus and typing into the find field works, so closing the bar is what hands focus to another key view. A `NSScrollView.isFindBarVisible` override didn't catch it and was reverted. Next idea: set the text view's `nextKeyView` to itself (or observe `NSTextFinder`'s `findBarContainer` through a custom container object), and give the find field an identifier. ⌘L shows no `editor.goToLine` element either.
 - Switch p95 over budget on Release: re-measure with the display awake before tuning. The sample shows an idle main thread, so the time is waiting (the daemon round trip and throttled frames of an occluded window).
 - `ui.click` now reaches sheets and child panels (fixed 04:15; Save All clicked in the quit sheet saves and quits). A subscriber cut off for falling behind now has its connection closed, so the app reconnects and takes a fresh snapshot. That path is not driven; the ring's cut-off has a unit test.
 
@@ -93,6 +92,7 @@ T5.1 second pass, with the display awake: re-measure switch and reattach on Rele
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **Find and Go to Line focus fixed (04:20).** Closing the find bar makes the window itself first responder, and AppKit then picks the next key view, often the terminal in the other pane. The pane area now remembers which pane's find UI (a field or its field editor) last had focus. When focus leaves it without a person's command, it goes back to that pane's content instead of focusing the other pane. New step in `task-t1-6`: ⌘F then Escape, and ⌘L then Escape, both keep `editor:<path>` focused. 15/15, evidence `evidence/task-t1-6/20260929-041802`. Regressions: `task-t1-8` 74/74, `m1-daily` 16/16.
 - **Fixes after the gates (04:02–04:06).**
   - The Files segment keeps the last tab's folder while a file or diff pane has focus (R-FS-2). New step in `task-t1-5`, 18/18.
   - `ui.key`'s action router now sends a menu action to the focused view when that view handles it, before looking for a controller up the chain.

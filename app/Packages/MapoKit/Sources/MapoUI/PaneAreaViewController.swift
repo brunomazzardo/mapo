@@ -49,6 +49,10 @@ public final class PaneAreaViewController: NSViewController {
     /// Set by user actions whose result should take keyboard focus (⌘T, ⌘D, ⇧⌘N, a pane's buttons), even
     /// from the rail; cleared once the focused pane changed and took focus.
     private var focusRequested = true
+    /// The first responder before the last change, to spot focus leaving an editor's find bar.
+    /// The pane whose find UI (an editor's find or Go to Line field) last had keyboard focus, if the last
+    /// view to have it was one.
+    private var findUIPaneId: String?
     private var focusRequestGeneration = 0
     private var firstResponderObservation: NSKeyValueObservation?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -170,10 +174,30 @@ public final class PaneAreaViewController: NSViewController {
 
     /// The pane whose content just took keyboard focus becomes the focused pane (UX §4.1).
     private func firstResponderChanged() {
+        let findPane = findUIPaneId
+        // The window itself is a stop on the way (field → window → next view): remember the last view. The
+        // pane is read now, while a field editor is still inside its field.
+        if let now = view.window?.firstResponder as? NSView {
+            findUIPaneId = Self.isFindUI(now) ? shownContainer?.paneId(containing: now) : nil
+        }
         guard let view = view.window?.firstResponder as? NSView, let container = shownContainer,
             let paneId = container.paneId(containing: view), paneId != container.focusedPaneId
         else { return }
+        // Closing an editor's find bar makes AppKit pick the next key view, often a terminal in another
+        // pane. Focus leaving a focused pane's find UI without a person's command stays in that pane.
+        if !focusRequested, let findPane, findPane == container.focusedPaneId,
+            let card = container.card(for: findPane)
+        {
+            card.focusContent()
+            return
+        }
         actions.perform("pane.focus") { try await $0.focusPane(id: paneId) }
+    }
+
+    /// A view inside a text finder's bar: a field (or its field editor) that isn't the document text view.
+    private static func isFindUI(_ view: NSView) -> Bool {
+        if let text = view as? NSTextView { return text.isFieldEditor }
+        return view is NSTextField || view is NSSearchField
     }
 
     /// Moves keyboard focus into the focused pane when it changed, unless a person is working in the rail or

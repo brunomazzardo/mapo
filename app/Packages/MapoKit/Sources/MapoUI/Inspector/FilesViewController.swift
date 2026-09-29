@@ -149,7 +149,13 @@ public final class FilesViewController: NSViewController, NSOutlineViewDataSourc
 
     private func follow() {
         let boot: String? = if case .connected(let bootId) = client.store.connection { bootId } else { nil }
-        let target = targetFolder
+        var target = targetFolder
+        // A focused file or diff pane keeps the last focused tab's folder (R-FS-2).
+        if target == nil, let workspaceId = client.store.activeWorkspaceId,
+            client.store.focusedPane(inWorkspace: workspaceId).content.isFile
+        {
+            target = root
+        }
         if boot != connectedBoot {
             connectedBoot = boot
             // Watches are per connection: a new one starts with none.

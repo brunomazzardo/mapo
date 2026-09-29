@@ -110,6 +110,15 @@ wait_json 2 'map(select(.id == "inspector.files.row:src/lib.rs")) | length == 0'
 files_rows | expect_json 'map(select(.id == "inspector.files.row:src/lib.rs")) | length' 0
 mapo explorer refresh | expect_json '.state' '"ready"'
 
+step "A focused file pane keeps the last tab's folder (R-FS-2)"
+mapo file open "$D/a.txt" >/dev/null
+for _ in {1..40}; do [[ $(mapo ui snapshot | jq -r .focus.id) == "editor:$D/a.txt" ]] && break; sleep 0.05; done
+sleep 0.3
+mapo ui tree --depth 24 | jq -c '[.. | objects | select(.id? == "inspector.files.header") | .value]' | expect_json . "[\"$D\"]"
+mapo ui tree --depth 24 | jq -c '[.. | objects | select(.id? == "inspector.files.row:a.txt")] | length' | expect_json . 1
+mapo pane close >/dev/null
+mapo ui focus pane.terminal:terminal-1 >/dev/null 2>&1 || true
+
 step "The folder is deleted: missing with Retry, then it recovers by itself"
 mapo tab run terminal-1 "rm -rf $D" >/dev/null
 mapo ui wait inspector.files.retry --timeout-ms 2000 >/dev/null

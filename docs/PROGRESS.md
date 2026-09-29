@@ -39,6 +39,10 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **Fixes after the gates (04:05–04:25).**
+  - The Files segment keeps the last tab's folder while a file or diff pane has focus (R-FS-2). New step in `task-t1-5`, 18/18.
+  - `ui.key`'s action router now sends a menu action to the focused view when that view handles it, before looking for a controller up the chain.
+  - Still open (time-boxed at 20 min): with the window inactive, ⌘F in an editor opens a find bar whose field isn't in `ui.tree`, and closing it leaves focus on the terminal pane. Go to Line (⌘L) shows no `editor.goToLine` element. Next idea: check whether `window.sendEvent` of Escape reaches the find bar while the window isn't key, and give the find field an identifier.
 - **T4.3 done** (subagent) and **T4.4: M4 gate PASS.**
   - **T4.3:**
     - `git.status`, `git.diff` and `git.baseText` via the git CLI (`-c core.fsmonitor=false --no-optional-locks`).

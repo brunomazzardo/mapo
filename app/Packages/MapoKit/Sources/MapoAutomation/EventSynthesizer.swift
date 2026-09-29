@@ -195,6 +195,11 @@ struct ActionRouter {
         let chains = [window.firstResponder, window.contentView].map { start in
             sequence(first: start, next: { $0?.nextResponder }).compactMap { $0 }
         }
+        // The focused view itself wins when it handles the action (⌘F in an editor must reach that
+        // editor, not a terminal's find bar further along another chain).
+        if let first = window.firstResponder, !(first is NSWindow), first.responds(to: action) {
+            return first
+        }
         for chain in chains {
             let handlers = chain.filter { $0.responds(to: action) }
             if let controller = handlers.first(where: { $0 is NSViewController || $0 is NSWindowController }) {

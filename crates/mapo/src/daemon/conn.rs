@@ -174,12 +174,21 @@ async fn hello(
             .with_extra("daemonProtocol", json!(PROTOCOL_VERSION)),
         );
     }
+    let tab_caller = match params.credential.kind {
+        CredentialKind::Tab => shared.core.authenticate_tab(&params.credential.token).await,
+        _ => None,
+    };
     let caller = match params.credential.kind {
         CredentialKind::App if shared.token.matches(&params.credential.token) => Caller {
             kind: CredentialKind::App,
             tab_id: None,
             workspace_id: None,
         },
+        CredentialKind::Tab if tab_caller.is_some() => tab_caller.unwrap_or(Caller {
+            kind: CredentialKind::Tab,
+            tab_id: None,
+            workspace_id: None,
+        }),
         _ => {
             return fail(
                 Some(req.id),
@@ -260,6 +269,9 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
             .await;
     }
     match req.method.as_str() {
+        methods::TAB_SEND | methods::TAB_READ | methods::TAB_WAIT | methods::TAB_RUN => {
+            tab_io(shared, session, &req).await
+        }
         methods::PING => {
             let _: Empty = parse_params(&req.params)?;
             to_value(&PingResult {
@@ -295,6 +307,94 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
             "hello was already sent on this connection",
         )),
         other => Err(RpcError::invalid(format!("unknown method {other}"))),
+    }
+}
+
+/// Resolves the tab through the core, then acts on its live handle.
+async fn live_tab(
+    shared: &Shared,
+    session: &Session,
+    tab: Option<String>,
+    workspace: Option<String>,
+) -> Result<(mapo_protocol::types::TabSummary, mapo_term::tab::TabHandle), RpcError> {
+    // A tab created a moment ago may still be launching: give the host up to 5 s.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let summary = shared
+            .core
+            .resolve_tab(tab.clone(), workspace.clone(), session.caller.clone())
+            .await?;
+        if let Some(handle) = shared.host.get(&summary.id) {
+            return Ok((summary, handle));
+        }
+        let launching = summary.state == mapo_protocol::types::State::Starting
+            && summary.launch_error.is_none();
+        if !launching || tokio::time::Instant::now() >= deadline {
+            let why = summary
+                .launch_error
+                .as_ref()
+                .map(|e| e.message.clone())
+                .unwrap_or_else(|| "its shell isn't running".into());
+            return Err(RpcError::unavailable(format!(
+                "tab \"{}\" has no running shell: {why}",
+                summary.name
+            ))
+            .with_hint(format!("mapo tab focus {}", summary.name)));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+async fn tab_io(shared: &Shared, session: &Session, req: &Request) -> Result<Value, RpcError> {
+    use mapo_protocol::types::{TabRead, TabRun, TabSend, TabWait, Until};
+    use std::time::Duration;
+    match req.method.as_str() {
+        methods::TAB_SEND => {
+            let p: TabSend = parse_params(&req.params)?;
+            let (_, h) = live_tab(shared, session, p.tab, p.workspace).await?;
+            let paste = match p.paste {
+                None => None,
+                Some(Value::Bool(b)) => Some(b),
+                Some(Value::String(s)) if s == "auto" => None,
+                Some(other) => {
+                    return Err(RpcError::invalid(format!(
+                        "paste must be \"auto\", true or false, not {other}"
+                    )));
+                }
+            };
+            let sent = h.send(&p.text, p.execute, paste).await?;
+            Ok(json!({ "sent": sent }))
+        }
+        methods::TAB_READ => {
+            let p: TabRead = parse_params(&req.params)?;
+            let (_, h) = live_tab(shared, session, p.tab, p.workspace).await?;
+            to_value(&h.read(p.lines.unwrap_or(200)))
+        }
+        methods::TAB_WAIT => {
+            let p: TabWait = parse_params(&req.params)?;
+            let (_, h) = live_tab(shared, session, p.tab.clone(), p.workspace.clone()).await?;
+            let timeout = Duration::from_millis(p.timeout_ms.unwrap_or(600_000));
+            match &p.until {
+                Until::Word(w) if w == "idle" => h.wait_idle(timeout).await?,
+                Until::Word(w) => {
+                    return Err(RpcError::invalid(format!(
+                        "until must be \"idle\" or {{pattern}}, not {w:?}"
+                    )));
+                }
+                Until::Pattern { pattern } => h.wait_pattern(pattern, timeout).await?,
+            }
+            let summary = shared
+                .core
+                .resolve_tab(p.tab, p.workspace, session.caller.clone())
+                .await?;
+            to_value(&summary)
+        }
+        _ => {
+            let p: TabRun = parse_params(&req.params)?;
+            let (_, h) = live_tab(shared, session, p.tab, p.workspace).await?;
+            let timeout = Duration::from_millis(p.timeout_ms.unwrap_or(600_000));
+            to_value(&h.run(&p.command, p.lines.unwrap_or(200), timeout).await?)
+        }
     }
 }
 

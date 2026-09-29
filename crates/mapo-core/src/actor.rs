@@ -19,6 +19,53 @@ use crate::store::{self, Write};
 
 type Reply<T> = oneshot::Sender<Result<T, RpcError>>;
 
+/// What the process host (mapo-term, wired by the daemon) must start for a tab.
+#[derive(Debug, Clone)]
+pub struct LaunchSpec {
+    pub tab_id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub kind: TabKind,
+    pub cwd: String,
+    pub command: Option<String>,
+    /// The tab's `MAPO_TOKEN`; never log it.
+    pub token: String,
+    pub hook_token: String,
+}
+
+/// Commands from the core to the process host.
+#[derive(Debug, Clone)]
+pub enum HostCmd {
+    Launch(LaunchSpec),
+    Close { tab_id: String },
+}
+
+/// OSC 133 marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    PromptStart,
+    PromptEnd,
+    CommandStart,
+    CommandEnd(Option<i32>),
+}
+
+/// Facts the process host reports about a tab.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TabFact {
+    Spawned,
+    /// The shell reached its first prompt, or 3 s passed without integration.
+    Ready,
+    LaunchFailed(mapo_protocol::types::LaunchError),
+    Cwd(String),
+    Title(String),
+    Mark(Mark),
+    Exited {
+        code: i32,
+        after_prompt: bool,
+        duration_ms: u64,
+    },
+}
+
 pub struct Subscription {
     pub seq: u64,
     pub replay: Vec<mapo_protocol::types::Event>,
@@ -39,6 +86,20 @@ enum Msg {
     Emit {
         kind: String,
         data: Value,
+    },
+    Fact {
+        tab_id: String,
+        fact: TabFact,
+    },
+    Authenticate {
+        token: String,
+        reply: oneshot::Sender<Option<Caller>>,
+    },
+    Resolve {
+        tab: Option<String>,
+        workspace: Option<String>,
+        caller: Caller,
+        reply: Reply<TabSummary>,
     },
     Flush {
         reply: oneshot::Sender<()>,
@@ -100,6 +161,45 @@ impl CoreHandle {
         rx.await.map_err(|_| gone())?
     }
 
+    /// Reports a fact about a tab from the process host.
+    pub fn tab_fact(&self, tab_id: &str, fact: TabFact) {
+        let _ = self.tx.send(Msg::Fact {
+            tab_id: tab_id.to_owned(),
+            fact,
+        });
+    }
+
+    /// The caller for a tab token (`MAPO_TOKEN`), if it belongs to a live tab.
+    pub async fn authenticate_tab(&self, token: &str) -> Option<Caller> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Msg::Authenticate {
+                token: token.to_owned(),
+                reply,
+            })
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// Resolves a tab selector the way every tab method does (PROTOCOL §5).
+    pub async fn resolve_tab(
+        &self,
+        tab: Option<String>,
+        workspace: Option<String>,
+        caller: Caller,
+    ) -> Result<TabSummary, RpcError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Msg::Resolve {
+                tab,
+                workspace,
+                caller,
+                reply,
+            })
+            .map_err(|_| gone())?;
+        rx.await.map_err(|_| gone())?
+    }
+
     pub fn emit(&self, kind: &str, data: Value) {
         let _ = self.tx.send(Msg::Emit {
             kind: kind.to_owned(),
@@ -121,6 +221,7 @@ pub struct Options<'a> {
     pub state_db: &'a Path,
     pub boot_id: String,
     pub home: String,
+    pub host: mpsc::UnboundedSender<HostCmd>,
 }
 
 /// Opens the database, loads state and starts the actor on the current tokio runtime.
@@ -136,6 +237,8 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
         writer,
         pending: Vec::new(),
         home: opts.home,
+        host: opts.host,
+        tokens: Default::default(),
     };
     if core
         .active
@@ -143,6 +246,9 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
         .is_none_or(|a| core.ws_index(a).is_none())
     {
         core.active = core.workspaces.first().map(|w| w.id.clone());
+    }
+    for t in 0..core.tabs.len() {
+        core.launch(t);
     }
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
     tokio::spawn(async move {
@@ -163,6 +269,9 @@ struct Core {
     writer: std::sync::mpsc::Sender<Vec<Write>>,
     pending: Vec<Write>,
     home: String,
+    host: mpsc::UnboundedSender<HostCmd>,
+    /// Tab token → tab id. Revoked when the tab closes; new on every launch.
+    tokens: std::collections::HashMap<String, String>,
 }
 
 impl Core {
@@ -184,6 +293,30 @@ impl Core {
                 let _ = reply.send(result);
             }
             Msg::Emit { kind, data } => self.ring.push(&kind, data),
+            Msg::Fact { tab_id, fact } => self.fact(&tab_id, fact),
+            Msg::Authenticate { token, reply } => {
+                let caller = self
+                    .tokens
+                    .get(&token)
+                    .and_then(|id| self.tab_index(id))
+                    .map(|t| Caller {
+                        kind: CredentialKind::Tab,
+                        tab_id: Some(self.tabs[t].id.clone()),
+                        workspace_id: Some(self.tabs[t].workspace_id.clone()),
+                    });
+                let _ = reply.send(caller);
+            }
+            Msg::Resolve {
+                tab,
+                workspace,
+                caller,
+                reply,
+            } => {
+                let r = self
+                    .resolve_tab(tab.as_deref(), workspace.as_deref(), &caller)
+                    .map(|t| self.tab_summary(&self.tabs[t]));
+                let _ = reply.send(r);
+            }
             Msg::Flush { reply } => {
                 self.commit();
                 let (done, wait) = std::sync::mpsc::channel();
@@ -552,6 +685,12 @@ impl Core {
             .collect();
         self.tabs.retain(|t| t.workspace_id != id);
         for tab in &closing {
+            self.tokens.retain(|_, t| t != tab);
+            let _ = self.host.send(HostCmd::Close {
+                tab_id: tab.clone(),
+            });
+        }
+        for tab in &closing {
             self.ring
                 .push("tab.closed", json!({ "id": tab, "workspaceId": id }));
         }
@@ -643,6 +782,7 @@ impl Core {
             model::show_in_pane(&mut self.workspaces[ws].layout, Some(&self.tabs[t].id));
             self.layout_changed(ws);
         }
+        self.launch(t);
         self.ring
             .push("tab.created", json!(self.tab_summary(&self.tabs[t])));
         if focus {
@@ -660,6 +800,10 @@ impl Core {
             )));
         }
         let tab = self.tabs.remove(t);
+        self.tokens.retain(|_, id| *id != tab.id);
+        let _ = self.host.send(HostCmd::Close {
+            tab_id: tab.id.clone(),
+        });
         self.pending.push(Write::DeleteTab(tab.id.clone()));
         self.ring.push(
             "tab.closed",
@@ -682,6 +826,10 @@ impl Core {
     }
 
     fn focus_tab(&mut self, t: usize) {
+        if self.tabs[t].launch_error.is_some() && !self.tabs[t].facts.spawning {
+            self.launch(t);
+            self.touch_tab(t);
+        }
         let ws_id = self.tabs[t].workspace_id.clone();
         let Some(ws) = self.ws_index(&ws_id) else {
             return;
@@ -693,6 +841,119 @@ impl Core {
             self.touch_workspace(ws);
         }
     }
+}
+
+impl Core {
+    /// Starts the tab's process, one launch at a time (contract 1).
+    fn launch(&mut self, t: usize) {
+        if self.tabs[t].facts.spawning {
+            return;
+        }
+        let token = new_token();
+        let hook_token = new_token();
+        self.tokens.retain(|_, id| *id != self.tabs[t].id);
+        self.tokens.insert(token.clone(), self.tabs[t].id.clone());
+        let tab = &mut self.tabs[t];
+        tab.launch_error = None;
+        tab.last_exit = None;
+        tab.facts = Facts {
+            kind: Some(tab.kind),
+            spawning: true,
+            ..Default::default()
+        };
+        let _ = self.host.send(HostCmd::Launch(LaunchSpec {
+            tab_id: tab.id.clone(),
+            workspace_id: tab.workspace_id.clone(),
+            name: tab.name.clone(),
+            kind: tab.kind,
+            cwd: tab.cwd.clone(),
+            command: tab.launch.command.clone(),
+            token,
+            hook_token,
+        }));
+    }
+
+    fn fact(&mut self, tab_id: &str, fact: TabFact) {
+        let Some(t) = self.tab_index(tab_id) else {
+            return;
+        };
+        let before = status(&self.tabs[t].facts);
+        let mut persist = false;
+        let tab = &mut self.tabs[t];
+        match fact {
+            TabFact::Spawned => {}
+            TabFact::Ready => tab.facts.spawning = false,
+            TabFact::LaunchFailed(err) => {
+                tab.facts.spawning = false;
+                tab.facts.launch_error = true;
+                tab.launch_error = Some(err);
+                self.tokens.retain(|_, id| id != tab_id);
+            }
+            TabFact::Cwd(cwd) => {
+                if tab.cwd != cwd {
+                    tab.cwd = cwd;
+                    persist = true;
+                }
+            }
+            TabFact::Title(title) => tab.live_title = title,
+            TabFact::Mark(Mark::PromptStart | Mark::PromptEnd) => {
+                tab.facts.spawning = false;
+                tab.facts.in_command = false;
+            }
+            TabFact::Mark(Mark::CommandStart) => {
+                tab.facts.spawning = false;
+                tab.facts.in_command = true;
+                tab.facts.last_command_failed = None;
+            }
+            TabFact::Mark(Mark::CommandEnd(code)) => {
+                tab.facts.in_command = false;
+                tab.facts.last_command_failed = code.filter(|c| *c != 0);
+            }
+            TabFact::Exited {
+                code,
+                after_prompt,
+                duration_ms,
+            } => {
+                self.tokens.retain(|_, id| id != tab_id);
+                // R-TAB-12: a clean exit after the first prompt closes the tab, as terminals do.
+                if code == 0 && after_prompt {
+                    let _ = self.close_tab(t, true);
+                    return;
+                }
+                let tab = &mut self.tabs[t];
+                tab.facts = Facts {
+                    kind: Some(tab.kind),
+                    stopped_exit: Some(code),
+                    ..Default::default()
+                };
+                tab.last_exit = Some(mapo_protocol::types::LastExit { code, duration_ms });
+            }
+        }
+        if persist {
+            self.pending.push(Write::Tab(self.tabs[t].clone()));
+        }
+        let after = status(&self.tabs[t].facts);
+        let summary = self.tab_summary(&self.tabs[t]);
+        self.ring.push("tab.updated", json!(summary));
+        if after.0 != before.0 {
+            self.ring.push(
+                "tab.state",
+                json!({ "tabId": summary.id, "workspaceId": summary.workspace_id, "state": after.0,
+                        "previous": before.0, "stateLabel": after.1, "source": "shell" }),
+            );
+            if let Some(ws) = self.ws_index(&summary.workspace_id) {
+                let ws_summary = self.ws_summary(&self.workspaces[ws]);
+                self.ring.push("workspace.updated", json!(ws_summary));
+            }
+        }
+    }
+}
+
+/// 32 random bytes, base64url (PROTOCOL §3).
+fn new_token() -> String {
+    mapo_instance::Secret::generate()
+        .map(|s| s.expose().to_owned())
+        .unwrap_or_else(|_| uuid::Uuid::now_v7().simple().to_string())
 }
 
 fn non_empty(s: &str, what: &str) -> Result<String, RpcError> {

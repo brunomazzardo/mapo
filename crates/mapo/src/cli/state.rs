@@ -56,6 +56,34 @@ pub enum TabCommand {
     Rename { name: String, new_name: String },
     /// Show a tab and activate its workspace.
     Focus { name: String },
+    /// Type text into a tab (Enter is appended unless --no-execute).
+    Send {
+        name: String,
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+        #[arg(long)]
+        no_execute: bool,
+    },
+    /// Print a tab's last rows of scrollback and screen.
+    Read {
+        name: String,
+        #[arg(long)]
+        lines: Option<usize>,
+    },
+    /// Wait until a tab is idle at its prompt, or prints TEXT after the last send.
+    Wait {
+        name: String,
+        #[arg(long)]
+        until: String,
+    },
+    /// Run a command at the tab's prompt and print its output; exits with its code.
+    Run {
+        name: String,
+        #[arg(required = true, num_args = 1..)]
+        command: Vec<String>,
+        #[arg(long)]
+        lines: Option<usize>,
+    },
 }
 
 fn with_ws(cli: &Cli, mut params: Value) -> Value {
@@ -134,6 +162,72 @@ pub fn workspace(cli: &Cli, cmd: &WorkspaceCommand) -> Result<(), CliError> {
 }
 
 pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
+    match cmd {
+        TabCommand::Send {
+            name,
+            text,
+            no_execute,
+        } => {
+            let params = json!({ "tab": name, "text": text.join(" "), "execute": !no_execute });
+            let result = call(cli, "tab.send", with_ws(cli, params))?;
+            if wants_json(cli.json) {
+                println!("{result}");
+            }
+            return Ok(());
+        }
+        TabCommand::Read { name, lines } => {
+            let result = call(
+                cli,
+                "tab.read",
+                with_ws(cli, strip_nulls(json!({ "tab": name, "lines": lines }))),
+            )?;
+            if wants_json(cli.json) {
+                println!("{result}");
+            } else {
+                println!("{}", result["text"].as_str().unwrap_or_default());
+            }
+            return Ok(());
+        }
+        TabCommand::Wait { name, until } => {
+            let until = if until == "idle" {
+                json!("idle")
+            } else {
+                json!({ "pattern": until })
+            };
+            let mut params = json!({ "tab": name, "until": until });
+            if let Some(ms) = cli.timeout_ms {
+                params["timeoutMs"] = json!(ms);
+            }
+            let result = call(cli, "tab.wait", with_ws(cli, params))?;
+            print(cli, &result, TAB_COLS);
+            return Ok(());
+        }
+        TabCommand::Run {
+            name,
+            command,
+            lines,
+        } => {
+            let mut params =
+                strip_nulls(json!({ "tab": name, "command": command.join(" "), "lines": lines }));
+            if let Some(ms) = cli.timeout_ms {
+                params["timeoutMs"] = json!(ms);
+            }
+            let result = call(cli, "tab.run", with_ws(cli, params))?;
+            if wants_json(cli.json) {
+                println!("{result}");
+            } else if let Some(out) = result["output"].as_str()
+                && !out.is_empty()
+            {
+                println!("{out}");
+            }
+            let code = result["exitCode"].as_i64().unwrap_or(0) as i32;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let (method, params) = match cmd {
         TabCommand::List => ("tab.list", json!({})),
         TabCommand::New {
@@ -157,6 +251,12 @@ pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
             ("tab.rename", json!({ "tab": name, "name": new_name }))
         }
         TabCommand::Focus { name } => ("tab.focus", json!({ "tab": name })),
+        TabCommand::Send { .. }
+        | TabCommand::Read { .. }
+        | TabCommand::Wait { .. }
+        | TabCommand::Run { .. } => {
+            return Ok(());
+        }
     };
     let result = call(cli, method, with_ws(cli, strip_nulls(params)))?;
     print(cli, &result, TAB_COLS);

@@ -239,3 +239,67 @@ pub struct TabRename {
     pub workspace: Option<String>,
     pub name: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabSend {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub text: String,
+    #[serde(default = "yes")]
+    pub execute: bool,
+    /// `"auto"` (default), `true` or `false`.
+    #[serde(default)]
+    pub paste: Option<Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabRead {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub lines: Option<usize>,
+}
+
+/// `until`: `"idle"` or `{pattern}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Until {
+    Word(String),
+    Pattern { pattern: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabWait {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub until: Until,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabRun {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub lines: Option<usize>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}

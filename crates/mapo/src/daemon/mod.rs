@@ -2,6 +2,7 @@
 //! ENGINEERING §2.3). Without `--foreground` it detaches and waits until the daemon answers.
 
 mod conn;
+mod host;
 mod logging;
 
 use std::os::fd::AsFd;
@@ -30,6 +31,7 @@ pub struct Shared {
     /// Asks the accept loop to stop (daemon.shutdown); it then flips `shutdown` for everyone.
     pub stop_request: tokio::sync::Notify,
     pub core: mapo_core::CoreHandle,
+    pub host: Arc<host::Host>,
 }
 
 /// `mapo daemon [--foreground]`.
@@ -174,12 +176,23 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
     let boot_id = uuid::Uuid::now_v7().to_string();
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let result = runtime.block_on(async {
+        let (host_tx, host_rx) = tokio::sync::mpsc::unbounded_channel();
         let core = mapo_core::spawn(mapo_core::actor::Options {
             state_db: &paths.state_db,
             boot_id: boot_id.clone(),
             home,
+            host: host_tx,
         })
         .map_err(|e| RpcError::internal(e.to_string()))?;
+        let sink_core = core.clone();
+        let ctx = Arc::new(mapo_term::tab::HostContext {
+            instance: instance.name.clone(),
+            resources: mapo_term::env::Resources::from_exe(&exe),
+            shell: mapo_term::env::login_shell(None),
+            scrollback: 10_000,
+            sink: Arc::new(move |id: &str, fact| sink_core.tab_fact(id, fact)),
+        });
+        let host = host::spawn(host_rx, ctx);
         let shared = Arc::new(Shared {
             instance: instance.name.clone(),
             paths: paths.clone(),
@@ -189,8 +202,10 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
             shutdown,
             stop_request: tokio::sync::Notify::new(),
             core: core.clone(),
+            host: host.clone(),
         });
         let result = accept_loop(shared).await;
+        host.close_all().await;
         core.flush().await;
         result
     });

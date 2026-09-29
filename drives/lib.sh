@@ -35,8 +35,10 @@ typeset -gi DRIVE_FAILS=0 DRIVE_PASSES=0 DRIVE_ENDED=0 DRIVE_DAEMON_PID=0 DRIVE_
 typeset -gF DRIVE_T0=0
 typeset -ga DRIVE_TIMINGS DRIVE_STEPS
 
-# zsh runs an EXIT trap set inside a function when that function returns, so set it here.
+# zsh runs an EXIT trap set inside a function when that function returns, so set it here. Under
+# errexit, a failure inside a function exits without running the EXIT trap, so ZERR tears down too.
 trap drive_end EXIT
+trap drive_end ZERR
 trap 'DRIVE_FAILS+=1; exit 130' INT TERM
 
 _drive_ms() { print -- $(( int((EPOCHREALTIME - $1) * 1000) )) }
@@ -241,7 +243,7 @@ drive_end() {
     [[ -z $DRIVE_NAME ]] && return
     (( DRIVE_ENDED )) && return
     DRIVE_ENDED=1
-    trap - EXIT INT TERM
+    trap - EXIT INT TERM ZERR
     (( rc != 0 )) && { DRIVE_FAILS+=1; print "   FAIL the drive exited with status $rc at step $DRIVE_STEP"; }
     if typeset -f ui_snapshot >/dev/null && (( DRIVE_APP_PID )); then
         ui_snapshot end || true

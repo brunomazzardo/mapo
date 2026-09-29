@@ -10,3 +10,11 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+alacritty_terminal.workspace = true
+mapo-core.workspace = true
+mapo-protocol.workspace = true
+pty-process.workspace = true
+rustix.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true

@@ -93,7 +93,20 @@ daemon: guard
 
 # Build, stop this instance's previous app, then run the app in the foreground.
 app *ARGS: guard
-    @echo "not yet: PLAN T0.7" >&2; exit 1
+    #!/bin/zsh
+    set -euo pipefail
+    just instance={{instance}} profile={{profile}} build >/dev/null
+    runtime=$({{bin}} --instance {{instance}} instance show --json | jq -r .runtimeDir)
+    pidfile="$runtime/{{instance}}.app.pid"
+    if [[ -f "$pidfile" ]]; then
+        pid=$(sed -n 1p "$pidfile")
+        if [[ -n "$pid" ]] && ps -p "$pid" -o comm= 2>/dev/null | grep -q 'Mapo.app/Contents/MacOS/Mapo$'; then
+            kill -TERM "$pid" 2>/dev/null || true
+            for _ in {1..50}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+            kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    exec "{{app_bundle}}/Contents/MacOS/Mapo" --instance {{instance}} "$@"
 
 # Run the daemon and the app under mprocs.
 dev: guard

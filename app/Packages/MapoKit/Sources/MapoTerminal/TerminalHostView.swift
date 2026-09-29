@@ -156,7 +156,9 @@ public final class TerminalHostView: NSView {
         view.setAccessibilityIdentifier("pane.terminal:\(tabName)")
         let state = connection == .connected ? "connected" : "disconnected"
         view.setAccessibilityLabel("\(title ?? tabName), \(state)")
+        // AppKit exposes the button's cell as its accessibility element, so the cell needs the identifier too.
         scrim.button.setAccessibilityIdentifier("pane.reconnect:\(tabName)")
+        scrim.button.cell?.setAccessibilityIdentifier("pane.reconnect:\(tabName)")
     }
 
     private func showScrim() {

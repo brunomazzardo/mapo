@@ -1,0 +1,211 @@
+import Foundation
+import MapoClient
+import MapoProtocol
+
+/// What a rail row shows at its trailing edge (UX §3.1, §3.8).
+enum RailAccessory: Equatable {
+    case none
+    /// The workspace badge: tabs that need you.
+    case badge(Int)
+    /// "Needs you", "Failed" or "Couldn't start".
+    case word(String, RailTone)
+    /// ":4000" or ":4000 +1".
+    case port(String)
+    case dot(RailTone)
+    case ring
+
+    /// The snapshot form of UX §3.8, such as `badge:1`, `word:Failed` or `dot:running`.
+    var snapshotValue: String? {
+        switch self {
+        case .none: nil
+        case .badge(let count): "badge:\(count)"
+        case .word(let text, _): "word:\(text)"
+        case .port(let label): "port:\(label)"
+        case .dot(let tone): "dot:\(tone.rawValue)"
+        case .ring: "ring:stopped"
+        }
+    }
+}
+
+/// The status colors of UX §9.1.
+enum RailTone: String, Equatable {
+    case running, done, failed, needs, muted
+}
+
+enum RailIcon: String, Equatable {
+    case agent, shell, server
+}
+
+/// One row of the basic S2 rail, derived from the store. Equal rows render identically, which is how the
+/// rail reloads only the rows that changed.
+struct RailRow: Equatable {
+    enum Kind: Equatable {
+        case header
+        case workspace(expanded: Bool, active: Bool)
+        case tab(icon: RailIcon, selected: Bool)
+        case noTabs
+        case noWorkspaces
+        case newWorkspaceButton
+    }
+
+    /// Stable across renders: `workspace:<id>`, `tab:<id>`, and so on.
+    var key: String
+    var kind: Kind
+    /// The workspace or tab id.
+    var modelId: String?
+    var text: String
+    var secondaryText: String?
+    var state: TabState = .idle
+    var accessory: RailAccessory = .none
+    var tint: RailTone?
+    var identifier: String?
+    var label: String?
+    var help: String?
+    var tooltip: String?
+    /// Adds the 6 pt gap after the expanded workspace's last row.
+    var endsGroup = false
+
+    /// The row's own height; the group gap comes after it.
+    var contentHeight: Double {
+        switch kind {
+        case .workspace: 26
+        case .newWorkspaceButton: 28
+        default: 24
+        }
+    }
+
+    var height: Double { contentHeight + (endsGroup ? 6 : 0) }
+
+    var isSelected: Bool {
+        if case .tab(_, let selected) = kind { return selected }
+        return false
+    }
+
+    var isInteractive: Bool {
+        switch kind {
+        case .workspace, .tab: true
+        default: false
+        }
+    }
+}
+
+enum RailModel {
+    /// The rows in display order: the header, every workspace, and the tabs of the active one only.
+    static func rows(_ store: AppStore) -> [RailRow] {
+        var rows = [RailRow(key: "header", kind: .header, text: "Workspaces")]
+        guard store.hasSnapshot else { return rows }
+        if store.workspaces.isEmpty {
+            rows.append(RailRow(key: "no-workspaces", kind: .noWorkspaces, text: "No workspaces"))
+            rows.append(RailRow(key: "new-workspace", kind: .newWorkspaceButton, text: "New Workspace"))
+            return rows
+        }
+        for workspace in store.workspaces {
+            let active = workspace.id == store.activeWorkspaceId
+            rows.append(workspaceRow(workspace, active: active))
+            guard active else { continue }
+            let tabs = store.tabs(inWorkspace: workspace.id)
+            let selectedId = store.focusedTabId(inWorkspace: workspace.id)
+            if tabs.isEmpty {
+                rows.append(RailRow(key: "no-tabs:\(workspace.id)", kind: .noTabs, text: "No tabs", endsGroup: true))
+            }
+            for (index, tab) in tabs.enumerated() {
+                var row = tabRow(tab, workspace: workspace, selected: tab.id == selectedId)
+                row.endsGroup = index == tabs.count - 1
+                rows.append(row)
+            }
+        }
+        return rows
+    }
+
+    static func workspaceRow(_ workspace: WorkspaceSummary, active: Bool) -> RailRow {
+        var accessory = RailAccessory.none
+        if workspace.attentionCount > 0 {
+            accessory = .badge(workspace.attentionCount)
+        } else if !active {
+            switch workspace.state {
+            case .failed: accessory = .dot(.failed)
+            case .running: accessory = .dot(.running)
+            case .done: accessory = .dot(.done)
+            default: break
+            }
+        }
+        var label = workspace.name
+        if let branch = workspace.branch, !branch.isEmpty { label += ", branch \(branch)" }
+        if workspace.attentionCount == 1 {
+            label += ", 1 needs you"
+        } else if workspace.attentionCount > 1 {
+            label += ", \(workspace.attentionCount) need you"
+        } else if workspace.state != .idle {
+            label += ", \(stateWord(workspace.state, label: workspace.stateLabel))"
+        }
+        let tooltip = workspace.summary.isEmpty ? tabCount(workspace.tabCount) : workspace.summary
+        return RailRow(
+            key: "workspace:\(workspace.id)", kind: .workspace(expanded: active, active: active),
+            modelId: workspace.id, text: workspace.name, secondaryText: workspace.branch, state: workspace.state,
+            accessory: accessory, identifier: AXID.railWorkspace(workspace.name), label: label, tooltip: tooltip)
+    }
+
+    static func tabRow(_ tab: TabSummary, workspace: WorkspaceSummary, selected: Bool) -> RailRow {
+        let display = tab.labeled || tab.title.isEmpty ? tab.name : tab.title
+        let ports = tab.server?.ports ?? []
+        let icon: RailIcon = tab.isAgent ? .agent : (ports.isEmpty ? .shell : .server)
+        var accessory = RailAccessory.none
+        var tint: RailTone?
+        var phrase: String?
+        switch tab.state {
+        case .needsYou:
+            accessory = .word("Needs you", .needs)
+            tint = .needs
+            phrase = "needs you"
+        case .failed where tab.launchError != nil:
+            accessory = .word("Couldn't start", .failed)
+            tint = .failed
+            phrase = "couldn't start" + (tab.launchError.map { ", \($0.message.lowercased())" } ?? "")
+        case .failed:
+            accessory = .word("Failed", .failed)
+            tint = .failed
+            phrase = "failed" + (tab.lastExit.map { ", exit \($0.code)" } ?? "")
+        case .running where !ports.isEmpty:
+            accessory = .port(":\(ports[0])" + (ports.count > 1 ? " +\(ports.count - 1)" : ""))
+            phrase = "serving on port \(ports[0])"
+        case .running:
+            accessory = .dot(.running)
+            phrase = tab.stateLabel.isEmpty ? "running" : tab.stateLabel.lowercased()
+        case .done:
+            accessory = .dot(.done)
+            phrase = "done"
+        case .starting, .stopping:
+            accessory = .dot(.muted)
+            phrase = tab.state.rawValue
+        case .stopped:
+            accessory = .ring
+            tint = .muted
+            phrase = "stopped"
+        default:
+            break
+        }
+        var tooltip = abbreviateHome(tab.cwd)
+        if let detail = tab.stateDetail, !detail.isEmpty { tooltip += " · \(detail)" }
+        return RailRow(
+            key: "tab:\(tab.id)", kind: .tab(icon: icon, selected: selected), modelId: tab.id, text: display,
+            state: tab.state, accessory: accessory, tint: tint,
+            identifier: AXID.railTab(workspace: workspace.name, tab: tab.name),
+            label: phrase.map { "\(display), \($0)" } ?? display, help: tab.isAgent ? "Agent tab" : "Shell tab",
+            tooltip: tooltip)
+    }
+
+    private static func stateWord(_ state: TabState, label: String) -> String {
+        label.isEmpty ? state.rawValue.replacingOccurrences(of: "-", with: " ") : label.lowercased()
+    }
+
+    private static func tabCount(_ count: Int) -> String {
+        count == 1 ? "1 tab" : "\(count) tabs"
+    }
+
+    static func abbreviateHome(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
+    }
+}

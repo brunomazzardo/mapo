@@ -19,6 +19,8 @@ targets:
       path: Mapo/Info.plist
       properties:
         CFBundleDisplayName: Mapo Dev
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "26.0"
     entitlements:
       path: Mapo/Mapo.entitlements

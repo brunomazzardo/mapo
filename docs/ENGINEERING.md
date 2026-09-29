@@ -519,7 +519,7 @@ Job counts for this machine (12 cores: 8 performance and 4 efficiency; 32 GB). `
 |---|---|
 | 1 or 2 | default (12) |
 | 3 or 4 | 4 |
-| 5 or 6 (HANDOFF allows five workers plus the coordinator) | 3 |
+| 5 or more | 3 |
 
 Merge hotspots are `crates/mapo-protocol/`, `Cargo.lock`, `app/project.yml`, the `justfile` and `docs/PROGRESS.md` (owned by the coordinator, HANDOFF §7). Land protocol changes on `native` first as small additive commits, then rebase the topic branches. For a `Cargo.lock` conflict, take `native`'s version and run `cargo build`.
 

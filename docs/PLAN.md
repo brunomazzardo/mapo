@@ -98,7 +98,7 @@ T0.1 ─► T0.2 ─► T0.3 ─► T0.4 ─► T0.5 ─► T0.6 ─────
   └─► T0.8a  fetch, verify and link GhosttyKit ───────────► T0.8b
 ```
 
-On a single tree, work in ID order with two exceptions: T0.9 may come before T0.8b, whose acceptance uses `mapo ui`, and T0.8a may run any time after T0.1. HANDOFF §7 allows up to five parallel workers, Opus subagents or the user's helper sessions, each in its own worktree (ENGINEERING §2.7 has the commands):
+On a single tree, work in ID order with two exceptions: T0.9 may come before T0.8b, whose acceptance uses `mapo ui`, and T0.8a may run any time after T0.1. HANDOFF §7 allows up to three parallel writers, all Opus subagents of the coordinator (single writer; code from other sessions can't be merged), each in its own area or worktree (ENGINEERING §2.7 has the commands):
 
 | Track | Worktree, branch, instance | Tasks | Starts after | Owns |
 |---|---|---|---|---|

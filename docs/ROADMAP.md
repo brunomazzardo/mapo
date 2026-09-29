@@ -4,7 +4,7 @@ One page for the user, as of 2026-09-28. [PLAN.md](PLAN.md) has the tasks and th
 
 ## Milestones
 
-A milestone is done when its drive passes: a scripted walkthrough of the real app that leaves snapshots, screenshots and timings in `evidence/` ([ENGINEERING.md](ENGINEERING.md) §5). An agent-night is one overnight `/goal` run with up to five parallel workers in their own worktrees.
+A milestone is done when its drive passes: a scripted walkthrough of the real app that leaves snapshots, screenshots and timings in `evidence/` ([ENGINEERING.md](ENGINEERING.md) §5). An agent-night is one overnight `/goal` run: one coordinator writing code with up to three of its own subagents (HANDOFF §7).
 
 | Milestone | Goal | Key requirements | Exit: this drive passes | Size |
 |---|---|---|---|---|

@@ -104,24 +104,12 @@ Machine, verified 2026-09-28:
 ## 7. Parallel work, helper sessions and escalation
 
 - **Roles.** The session that runs the `/goal` is the **coordinator**. It owns the plan order, merges, drives and PROGRESS.md.
-- **Workers.** For the first overnight run (2026-09-28) the user created five extra Claude sessions for the coordinator to use: `mapo-bf`, `mapo-2b`, `mapo-02`, `mapo-07`, `mapo-30`.
-- **Run of 2026-09-28/29.** The session `mapo-native` never processed its kickoff: the message sat in its queue and the session stayed "waiting". At 23:40, `mapo-32` made **`mapo-bf` the coordinator**. The workers are `mapo-2b`, `mapo-02`, `mapo-07` and `mapo-30`, plus Opus subagents. If `mapo-native` wakes up later, it must not start a second run; it asks `mapo-bf` for a task instead.
-  - Find them with `ListAgents`, and hand them tasks with `SendMessage`.
-  - Opus subagents (the Agent tool) are also allowed.
-  - Keep at most five workers active at once, so builds don't starve each other. Don't use other sessions the user didn't list (for example `mapo-22` and `mapo-fe`); they belong to other work.
-- **Each worker** gets its own worktree, branch and instance, and its own `target/` and `.build/`:
-
-  ```
-  git -C ~/code/mapo-native worktree add ../mapo-native-<topic> -b native-<topic> native
-  ```
-
-  Its instance is `dev-mapo-native-<topic>`. Tell each worker to read `~/code/mapo-native/AGENTS.md`, this file and its PLAN task(s) first. Its message should name the exact task IDs, the acceptance, the worktree path, and "commit on your branch, never push, report back with SendMessage when done or blocked".
-- **Good parallel splits:**
-  - the Rust daemon track (T0.3 to T0.6)
-  - the Swift app track (T0.7, then T0.8 once `mapo attach` exists)
-  - GhosttyKit acquisition (the first half of T0.8)
-  - later, the independent M1 tasks marked in PLAN (Files inspector, editor, palette, appearance).
-- **The coordinator** merges worker branches back into `native`, fast-forward or by clean rebase. After every merge it runs `just build` and the relevant drive, and it keeps PROGRESS.md current.
+- **Workers: single writer.** Only the coordinator's session writes code into the shared branch. In the 2026-09-28/29 run the auto-mode classifier refused to cherry-pick commits made by other sessions ("Untrusted Code Integration"), so code produced in helper sessions could never be merged.
+  - The coordinator's own Opus subagents (the Agent tool) may write code. Give each one its own area of the tree (for example Rust crates or `app/`), or its own worktree that the coordinator merges. The coordinator reviews and commits.
+  - Other Claude sessions are for text-only work: spec-compliance reviews of recent commits, research write-ups for upcoming tasks, and pre-reading acceptance steps. They report back with `SendMessage`.
+  - At most three writers at once, so builds and the account's usage limit don't starve.
+- **Starting a run.** Before leaving, confirm the coordinator session is actually working: it has acknowledged the kickoff and its first commit or PROGRESS entry has appeared. In the first run, the designated session sat on its queued kickoff until the user came back.
+- **Usage limit.** The account's session limit stopped everything for an hour in the first run. Keep at most two or three concurrent subagents, skip optional reviews, and write a PROGRESS entry before long steps.
 - **Escalation.** Report urgent issues to the session `mapo-32` with `SendMessage`. `mapo-32` ran the interview and holds its full context. Urgent means:
   - a hard rule would have to be broken
   - a "User" decision looks impossible or wrong
@@ -152,9 +140,9 @@ Paste this into Claude Code started in `~/code/mapo-native`:
 
 Read AGENTS.md, docs/HANDOFF.md and docs/PLAN.md first; treat docs/DECISIONS.md, REQUIREMENTS.md, UX.md, ARCHITECTURE.md, PROTOCOL.md and ENGINEERING.md as the spec. For every task: implement, `just build`, then validate by driving the real daemon and app (mapo CLI, `mapo ui …`, `just drive …`), read the evidence like a user would (looks right, feels fast, keeps focus), fix until the task's acceptance holds, commit one small verified slice (never push), and log it in docs/PROGRESS.md with the evidence path. M0 must pass `just drive m0-skeleton` before M1 starts.
 
-You are the coordinator. You may parallelize independent PLAN tasks with Opus subagents and with the five helper sessions the user created (mapo-bf, mapo-2b, mapo-02, mapo-07, mapo-30; find them with ListAgents, brief them with SendMessage per HANDOFF §7): at most five workers, each in its own worktree/branch/instance, you merge and re-drive after every merge, and you own PROGRESS.md. Escalate urgent issues (HANDOFF §7 defines urgent) to the session mapo-32 with SendMessage and keep working on unblocked tasks meanwhile.
+You are the coordinator and the single writer (HANDOFF §7): parallelize independent PLAN tasks only with your own Opus subagents (at most two or three at once, each in its own area of the tree or its own worktree that you merge); other Claude sessions, if the user provides any, do text-only reviews and research; you re-drive after every merge and you own PROGRESS.md. Escalate urgent issues (HANDOFF §7 defines urgent) to the session mapo-32 with SendMessage and keep working on unblocked tasks meanwhile.
 
-Hard rules: use your own MAPO_INSTANCE (dev-mapo-native, dev-mapo-native-<topic>, drive-*); never touch ~/code/mapo, /Applications/Mapo.app, instance `main`, ~/.mapo or ~/Library/Application Support/Mapo; don't use sessions other than the five helpers and mapo-32; stop only processes you started; don't reopen docs/DECISIONS.md — record conflicts under "Needs the user" and move on; respect PLAN timeboxes (GhosttyKit 2 h → SwiftTerm fallback; any other blocker 90 min → record it and continue with the next unblocked task); don't change system settings or register login items; in drives that run real Claude use disposable folders and harmless prompts and never work around a permission refusal. Work on Opus; use a Fable subagent only for a critical review at milestone boundaries.
+Hard rules: use your own MAPO_INSTANCE (dev-mapo-native, dev-mapo-native-<topic>, drive-*); never touch ~/code/mapo, /Applications/Mapo.app, instance `main`, ~/.mapo or ~/Library/Application Support/Mapo; don't use sessions the user didn't name for this run; stop only processes you started; don't reopen docs/DECISIONS.md — record conflicts under "Needs the user" and move on; respect PLAN timeboxes (GhosttyKit 2 h → SwiftTerm fallback; any other blocker 90 min → record it and continue with the next unblocked task); don't change system settings or register login items; in drives that run real Claude use disposable folders and harmless prompts and never work around a permission refusal. Work on Opus; use a Fable subagent only for a critical review at milestone boundaries.
 
 Stop starting new tasks at 08:00 America/Sao_Paulo, finish or cleanly revert in-flight work (yours and the workers'), stop every instance you or they started, and write the morning report at the top of docs/PROGRESS.md using the template in docs/PLAN.md.
 ```

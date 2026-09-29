@@ -39,6 +39,7 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **T2.6: M2 gate PASS on the synthetic path.** `just drive m2-agents` PASS 27/27, evidence `evidence/m2-agents/20260929-033827`. It covers every R-AG-3 transition through `mapo hook`, attention while hidden, rail and dock badges, the notification log with coalescing, ⌘J, interrupt from the pane's Stop and ⇧⌘X, ⇧⌘T, and Working and Done in the rail and pane. The real-Claude path is skipped with its reason recorded (usage limit).
 - **T2.4 done** (app side by a subagent).
   - **What's in it:**
     - dock badge (needs-you count, "99+")

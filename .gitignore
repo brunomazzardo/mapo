@@ -1,0 +1,20 @@
+# Rust
+/target/
+
+# Xcode / SwiftPM
+/.build/
+/app/Mapo.xcodeproj/
+/app/Packages/*/.build/
+/app/Packages/*/.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Generated (by `just gen`)
+/app/Packages/MapoKit/Sources/MapoProtocol/Generated/
+
+# Drive evidence (copy selected screenshots into docs/progress/ instead)
+/evidence/
+
+# macOS
+.DS_Store

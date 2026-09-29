@@ -90,6 +90,12 @@ T5.1 second pass, with the display awake: re-measure switch and reattach on Rele
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **R-ED-2: tree-sitter highlighting (04:55).** Written in the worktree `native-ts` by an Opus subagent, then cherry-picked onto `native` (`2 commits ending d181e92e8db`).
+  - SwiftTreeSitter 0.25.0 (BSD-3) with tree-sitter 0.25.10. Grammars for all 15 R-ED-2 languages, all MIT: Swift, Rust, TS/TSX, JS, JSON, Python, Go, Markdown, YAML, TOML, Bash, CSS, HTML, SQL. Versions are pinned, and `Package.resolved` is committed. Neon isn't used.
+  - Each pass re-parses the whole file off the main thread (about 53 ms for 2,000 lines, Debug). The regex highlighter now only colors the first screen until a grammar's query has compiled.
+  - `ui.snapshot` gains `model.editors`: each editor's language, and the engine and token counts of its last pass.
+  - `task-t1-6` has a new step: tree-sitter colors all 2,000 lines. PASS 15/15, `file.open` 62 ms (budget 100). The step now polls for the span instead of reading it once: the first run after the build read it before the open had painted and recorded -1. Also passing: `task-t1-8` 79/79, `m1-daily` 16/16 and `task-t3-1` 129/129. The MapoEditor tests pass 13.
+  - Known gaps: SQL numbers show as strings (Lua-style patterns in its query); Rust booleans take the number color; HTML doesn't highlight embedded `<script>` and `<style>`; one Swift call form isn't colored as a function.
 - **`ui hover`, `ui scroll` and `debug latency` (04:44).** These are the PROTOCOL §9 verbs the T3.1 walk found missing.
   - `ui.hover` sends `mouseEntered`, `mouseMoved` and `mouseExited` to the tracking areas under the target itself, because synthetic events don't move the real cursor. It returns `hovered`, the owners it reached.
   - `ui.scroll --dy N` sends a pixel scroll-wheel event over the target. Positive dy reveals content below; this is recorded in PROTOCOL §6.8.

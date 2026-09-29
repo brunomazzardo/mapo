@@ -63,7 +63,12 @@ step "A 2,000-line file opens within budget"
 mapo ui metrics --reset >/dev/null
 mapo file open "$D/big.swift" >/dev/null
 wait_focus "editor:$D/big.swift"
-ms=$(mapo ui metrics | jq '[.navigation[]? | select(.name == "file.open") | .ms] | last // -1 | floor')
+# The span ends at first paint; poll for it so a slow open reports its time instead of -1.
+for _ in {1..60}; do
+  ms=$(mapo ui metrics | jq '[.navigation[]? | select(.name == "file.open") | .ms] | last // -1 | floor')
+  (( ms >= 0 )) && break
+  sleep 0.05
+done
 _drive_record_timing file.open "$ms"
 print -r -- "{\"ms\":$ms}" | expect_json '.ms >= 0 and .ms <= 100' true
 

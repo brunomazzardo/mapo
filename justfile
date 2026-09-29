@@ -135,7 +135,22 @@ drive NAME *ARGS:
 
 # Save a snapshot and a screenshot of this instance's window into evidence/.
 snap STEP="manual": guard
-    @echo "not yet: PLAN T0.9" >&2; exit 1
+    #!/bin/zsh
+    set -euo pipefail
+    dir="evidence/{{task}}/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$dir"
+    m() { env -u MAPO_TOKEN -u MAPO_HOOK_TOKEN {{bin}} --instance {{instance}} --json "$@"; }
+    m ui snapshot > "$dir/snapshot-{{STEP}}.json"
+    win=$(m ui window)
+    num=$(print -r -- "$win" | jq -r .windowNumber)
+    png="$dir/shot-{{STEP}}.png"
+    if [[ $(print -r -- "$win" | jq -r .occluded) != true ]] && screencapture -x -o -l "$num" "$png" 2>/dev/null \
+        && (( $(stat -f %z "$png" 2>/dev/null || echo 0) > 20000 )); then
+        echo "$png"
+    else
+        rm -f "$png"
+        echo "pixels: unavailable ($dir/snapshot-{{STEP}}.json written)"
+    fi
 
 # Stop this instance's app and daemon.
 kill: guard

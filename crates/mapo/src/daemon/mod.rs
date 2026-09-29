@@ -35,6 +35,11 @@ pub struct Shared {
     pub stop_request: tokio::sync::Notify,
     pub core: mapo_core::CoreHandle,
     pub host: Arc<host::Host>,
+    /// The most recently registered app; `ui.*` goes there (PROTOCOL §6.8).
+    pub app: std::sync::Mutex<Option<conn::AppRoute>>,
+    /// Milliseconds from the last attach hello to its replay being queued.
+    pub last_attach_ms: std::sync::atomic::AtomicU64,
+    pub next_conn: std::sync::atomic::AtomicU64,
 }
 
 /// `mapo daemon [--foreground]`.
@@ -206,6 +211,9 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
             stop_request: tokio::sync::Notify::new(),
             core: core.clone(),
             host: host.clone(),
+            app: std::sync::Mutex::new(None),
+            last_attach_ms: std::sync::atomic::AtomicU64::new(0),
+            next_conn: std::sync::atomic::AtomicU64::new(1),
         });
         let result = accept_loop(shared).await;
         host.close_all().await;

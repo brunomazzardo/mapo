@@ -58,6 +58,55 @@ pub(super) fn encode(msg: &impl serde::Serialize) -> Vec<u8> {
 /// Bytes queued for the connection's writer task.
 pub(super) type Tx = mpsc::UnboundedSender<Vec<u8>>;
 
+type Pending = Arc<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
+>;
+
+/// A registered app connection that `ui.*` requests are forwarded to.
+#[derive(Clone)]
+pub struct AppRoute {
+    conn: u64,
+    tx: Tx,
+    pending: Pending,
+    next: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl AppRoute {
+    /// Sends a request to the app and waits for its answer.
+    async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value, RpcError> {
+        let n = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("d-{n}");
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if let Ok(mut p) = self.pending.lock() {
+            p.insert(id.clone(), reply);
+        }
+        let req = Request::new(Id::Str(id.clone()), method, params);
+        if self.tx.send(encode(&req)).is_err() {
+            return Err(RpcError::unavailable("the app disconnected"));
+        }
+        let result = tokio::time::timeout(timeout, rx).await;
+        if let Ok(mut p) = self.pending.lock() {
+            p.remove(&id);
+        }
+        match result {
+            Ok(Ok(resp)) => resp.into_result(),
+            Ok(Err(_)) => Err(RpcError::unavailable("the app disconnected")),
+            Err(_) => Err(RpcError::new(
+                mapo_protocol::ErrorKind::Timeout,
+                format!(
+                    "the app didn't answer {method} within {} ms",
+                    timeout.as_millis()
+                ),
+            )),
+        }
+    }
+}
+
 pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -88,6 +137,10 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
 
     let mut stop = shared.shutdown.subscribe();
     let mut subscribe_task: Option<tokio::task::JoinHandle<()>> = None;
+    let conn_id = shared
+        .next_conn
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let pending: Pending = Arc::default();
     loop {
         let line = tokio::select! {
             line = read_line(&mut reader) => line,
@@ -102,6 +155,35 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
                         Some(tokio::spawn(
                             async move { subscribe(&shared, &req, &tx).await },
                         ));
+                }
+                Ok(Incoming::Request(req)) if req.method == "app.register" => {
+                    let resp = if session.role == mapo_protocol::hello::Role::App
+                        && session.caller.kind == CredentialKind::App
+                    {
+                        if let Ok(mut app) = shared.app.lock() {
+                            *app = Some(AppRoute {
+                                conn: conn_id,
+                                tx: tx.clone(),
+                                pending: pending.clone(),
+                                next: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                            });
+                        }
+                        tracing::info!(conn = conn_id, "app registered");
+                        Response::ok(req.id, json!({}))
+                    } else {
+                        Response::err(
+                            Some(req.id),
+                            RpcError::forbidden("app.register needs the app role and credential"),
+                        )
+                    };
+                    let _ = tx.send(encode(&resp));
+                }
+                Ok(Incoming::Response(resp)) => {
+                    if let Some(Id::Str(id)) = &resp.id
+                        && let Some(reply) = pending.lock().ok().and_then(|mut p| p.remove(id))
+                    {
+                        let _ = reply.send(resp);
+                    }
                 }
                 Ok(Incoming::Request(req)) => {
                     let (shared, session, tx) = (shared.clone(), session.clone(), tx.clone());
@@ -121,7 +203,7 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
                         .instrument(span),
                     );
                 }
-                Ok(Incoming::Notification(_) | Incoming::Response(_)) => {}
+                Ok(Incoming::Notification(_)) => {}
                 Err((id, e)) => {
                     let _ = tx.send(encode(&Response::err(id, e)));
                 }
@@ -140,6 +222,11 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
         task.abort();
     }
     if session.role == mapo_protocol::hello::Role::App {
+        if let Ok(mut app) = shared.app.lock()
+            && app.as_ref().is_some_and(|a| a.conn == conn_id)
+        {
+            *app = None;
+        }
         shared.core.emit("app.disconnected", json!({}));
     }
     drop(tx);
@@ -317,6 +404,9 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
             .call(&req.method, req.params, session.caller.clone())
             .await;
     }
+    if req.method.starts_with("ui.") {
+        return ui(shared, &req).await;
+    }
     match req.method.as_str() {
         methods::TAB_SEND | methods::TAB_READ | methods::TAB_WAIT | methods::TAB_RUN => {
             tab_io(shared, session, &req).await
@@ -445,6 +535,64 @@ async fn tab_io(shared: &Shared, session: &Session, req: &Request) -> Result<Val
             to_value(&h.run(&p.command, p.lines.unwrap_or(200), timeout).await?)
         }
     }
+}
+
+/// Forwards `ui.*` to the registered app; adds the daemon's own truth to snapshots and metrics.
+async fn ui(shared: &Shared, req: &Request) -> Result<Value, RpcError> {
+    let route = shared
+        .app
+        .lock()
+        .ok()
+        .and_then(|a| a.clone())
+        .ok_or_else(|| {
+            RpcError::unavailable("no app is connected to this instance").with_hint("just app")
+        })?;
+    let timeout = req
+        .params
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .map_or(std::time::Duration::from_secs(10), |ms| {
+            std::time::Duration::from_millis(ms + 1000)
+        });
+    let mut result = route.call(&req.method, req.params.clone(), timeout).await?;
+    match req.method.as_str() {
+        "ui.snapshot" => {
+            result["terminals"] = json!(terminals(shared).await);
+        }
+        "ui.metrics" => {
+            let ms = shared
+                .last_attach_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            result["attach"] = json!({ "lastMs": if ms == 0 { Value::Null } else { json!(ms) } });
+        }
+        _ => {}
+    }
+    Ok(result)
+}
+
+/// The visible terminal panes of the active workspace, with the daemon's text (`tab read` rules).
+async fn terminals(shared: &Shared) -> Vec<Value> {
+    let app = Caller {
+        kind: CredentialKind::App,
+        tab_id: None,
+        workspace_id: None,
+    };
+    let Ok(snapshot) = shared
+        .core
+        .call(methods::STATE_SNAPSHOT, json!({}), app)
+        .await
+    else {
+        return vec![];
+    };
+    let tabs = snapshot["tabs"].as_array().cloned().unwrap_or_default();
+    tabs.iter()
+        .filter(|t| t["visible"] == json!(true))
+        .filter_map(|t| {
+            let id = t["id"].as_str()?;
+            let handle = shared.host.get(id)?;
+            Some(json!({ "tabId": id, "paneId": t["paneId"], "text": handle.read(200).text }))
+        })
+        .collect()
 }
 
 fn to_value(v: &impl serde::Serialize) -> Result<Value, RpcError> {

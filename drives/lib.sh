@@ -103,14 +103,67 @@ _drive_stop_daemon() {
     fi
 }
 
-# Starts the app for the drive's instance. Available from T0.9.
+# Starts the app for the drive's instance, waits for its window, and records the launch.
 _drive_start_app() {
     [[ ${DRIVE_NO_APP:-0} == 1 ]] && return 0
-    if [[ ! -x "$MAPO_APP/Contents/MacOS/Mapo" ]] || ! typeset -f ui_snapshot >/dev/null; then
-        _drive_log "   app: not yet (PLAN T0.9); set DRIVE_NO_APP=1"
-        return 0
-    fi
     _drive_start_app_impl
+    ui_snapshot launch || true
+    ui_shot launch || true
+}
+
+# Launches Mapo.app --no-spawn-daemon for the drive instance and waits for window.main.
+_drive_start_app_impl() {
+    local t=$EPOCHREALTIME
+    if [[ ! -x "$MAPO_APP/Contents/MacOS/Mapo" ]]; then
+        print -u2 "drive: $MAPO_APP is missing; run just build"
+        return 1
+    fi
+    "$MAPO_APP/Contents/MacOS/Mapo" --instance "$DRIVE_INSTANCE" --no-spawn-daemon \
+        >> "$EVIDENCE/app-stdout.txt" 2>&1 &
+    DRIVE_APP_PID=$!
+    disown $DRIVE_APP_PID 2>/dev/null || true
+    local i
+    for i in {1..200}; do
+        mapo ui wait window.main --timeout-ms 200 >/dev/null 2>&1 && break
+        kill -0 $DRIVE_APP_PID 2>/dev/null || { print -u2 "drive: the app exited during launch"; return 1; }
+        sleep 0.05
+    done
+    mapo ui focus window.main >/dev/null 2>&1 || true
+    _drive_record_timing app-ready $(_drive_ms $t)
+    local launch
+    launch=$(mapo ui metrics 2>/dev/null | jq '.launch.processStartToFirstFrameMs // empty' || true)
+    [[ -n $launch ]] && _drive_record_timing launch "${launch%.*}"
+    return 0
+}
+
+# ui_snapshot STEP: snapshot-NN-STEP.json, and SNAP points at it.
+ui_snapshot() {
+    SNAP="$EVIDENCE/snapshot-$DRIVE_STEP-$1.json"
+    mapo ui snapshot > "$SNAP" 2>/dev/null || { print -r -- '{}' > "$SNAP"; return 1; }
+}
+
+# ui_shot STEP: shot-NN-STEP.png of the drive's window, when pixels are available.
+ui_shot() {
+    SHOT=""
+    local win num occluded png="$EVIDENCE/shot-$DRIVE_STEP-$1.png"
+    win=$(mapo ui window 2>/dev/null) || { _drive_log "   pixels: unavailable (no window)"; return 0; }
+    num=$(print -r -- "$win" | jq -r .windowNumber)
+    occluded=$(print -r -- "$win" | jq -r .occluded)
+    if [[ $occluded == true ]]; then PIXELS=unavailable; _drive_log "   pixels: unavailable (occluded)"; return 0; fi
+    if screencapture -x -o -l "$num" "$png" 2>/dev/null && [[ -s $png ]] && _drive_png_has_content "$png"; then
+        PIXELS=available
+        SHOT=$png
+    else
+        rm -f "$png"
+        PIXELS=unavailable
+        _drive_log "   pixels: unavailable"
+    fi
+    return 0
+}
+
+# A capture without Screen Recording is one flat color, which compresses to a few KB.
+_drive_png_has_content() {
+    (( $(stat -f %z "$1") > 20000 ))
 }
 
 _drive_stop_app() {

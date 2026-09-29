@@ -58,7 +58,11 @@ pub async fn run(
     if strategy == ReplayStrategy::Raw {
         handle.resize(p.cols, p.rows, p.width_px, p.height_px).await;
     }
-    tracing::info!(tab = %summary.id, replay_bytes = replay.len(), ms = begun.elapsed().as_millis() as u64, "attached");
+    let ms = begun.elapsed().as_millis() as u64;
+    shared
+        .last_attach_ms
+        .store(ms.max(1), std::sync::atomic::Ordering::Relaxed);
+    tracing::info!(tab = %summary.id, replay_bytes = replay.len(), ms, "attached");
     serve(shared, &handle, reader, tx, &mut live, strategy).await;
     handle.detach();
     tracing::info!(tab = %summary.id, "detached");

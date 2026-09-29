@@ -4,6 +4,7 @@ mod attach;
 mod debug;
 mod instance;
 mod state;
+mod ui;
 
 use clap::{Parser, Subcommand};
 use mapo_protocol::hello::Role;
@@ -54,6 +55,9 @@ pub enum Command {
         #[arg(long = "type")]
         types: Vec<String>,
     },
+    /// Drive the app like a person: tree, snapshot, click, type, keys, waits, metrics.
+    #[command(subcommand)]
+    Ui(ui::UiCommand),
     /// Show, list, wait for, stop or clean instances.
     Instance(instance::InstanceArgs),
     /// Attach this terminal to a tab (what every terminal surface runs).
@@ -87,6 +91,7 @@ impl Cli {
                 after,
                 types,
             } => state::events(self, *follow, *after, types),
+            Command::Ui(cmd) => ui::run(self, cmd),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
             Command::Daemon { foreground } => {

@@ -2,6 +2,60 @@
 
 Newest entries first. Every session adds an entry. Every overnight run ends with a **morning report**; its template is in [PLAN.md](PLAN.md). Keep the entries short, link evidence, and move anything that needs the user into "Needs the user".
 
+## 2026-09-29 morning report
+
+Run: started 23:35, written at 04:10 America/Sao_Paulo. The account's usage limit stopped everything from 02:04 to 03:00. Coordinator `mapo-bf`. Code was written on `native` by the coordinator and by its own Opus subagents, 2–3 at a time, each working in its own area of the tree. The four helper sessions' branches were not merged (see Needs the user).
+
+Summary: M0, M1, M2 (synthetic path), M3 (without real Claude) and M4 are built, and every milestone gate drive passes. T5.1 ran once on a Release build. What to try first: `cd ~/code/mapo-native && just app`. You get the S2 rail, tiling panes (⌘D, ⇧⌘D), SwiftTerm terminals served by the daemon that survive ⌘Q and relaunch, ⌘K, Files and Changes (⌥⌘0), and the editor. Try `mapo tab send`, `mapo tab run`, `mapo tab ask` and `mapo mcp` from inside a tab.
+
+### What works
+| Area | Status | Gate or drive | Notes |
+|---|---|---|---|
+| M0: daemon, instances, PTY tabs, zsh integration, `mapo attach`, app skeleton, `mapo ui` | done | m0-skeleton PASS 17/17 | The terminal engine is SwiftTerm, the documented fallback: GhosttyKit acquisition was refused |
+| M1: S2 rail, status, tiling panes, switching, Files, editor, ⌘K, keymap table, Mapo Glass | done | m1-daily PASS 16/16; task-t1-1..9 PASS | Find and Go to Line focus is still open |
+| M2: plugin, `mapo hook`, agent status machine, agent tabs, interrupt, resume, attention | done on the synthetic path | m2-agents PASS 27/27; task-t2-2, task-t2-4 PASS | No real Claude was run |
+| M3: activity log, `tab ask`, `events.wait`, `mapo mcp` (32 tools), skill | done, except the full T3.1 walk | m3-control PASS 9/9; task-t3-5 PASS | `tab ask` verified synthetically only |
+| M4: server detection, ports and stop, Changes, diff, gutter | done | m4-servers-changes PASS 27/27 | |
+| T5.1: performance pass | first run | m5-switch PASS | Two misses, below |
+
+Evidence folders: `evidence/m0-skeleton/20260929-040132`, `evidence/m1-daily/20260929-040536`, `evidence/m2-agents/20260929-040008`, `evidence/m3-control/20260929-035955`, `evidence/m4-servers-changes/20260929-040201`, `evidence/m5-switch/20260929-034946` (`evidence/` is gitignored and local). Screenshots: none. Pixels were unavailable all night (window occluded, display asleep, Screen Recording not granted), so `docs/progress/` is empty and every visual claim is unverified.
+
+### Metrics against budgets (R-NF-1, Release build unless noted)
+| Metric | Budget | Measured | Source |
+|---|---|---|---|
+| Cold launch to first frame, daemon running | ≤ 400 ms | 396 ms (median of 5) | m5-switch, ui.metrics |
+| Reattach and paint | ≤ 150 ms | 270 ms after a daemon restart, including reconnect backoff | m5-switch, app.reattach |
+| Switch workspace | ≤ 50 ms | 114 ms p95 with 5 panes each (Release, occluded window); 29 ms p95 (Debug, m1-daily) | navigation workspace.switch |
+| Keystroke to glyph against Ghostty | ≤ +2 ms | not measured (T5.3 with you) | |
+| Idle CPU, 20 tabs | app ≈ 0, daemon < 0.5 % | both < 0.1 % over 30 s | mapo debug stats |
+| Memory, 20 tabs, 10 visible | daemon ≤ 150 MB, app ≤ 250 MB | daemon 14 MB, app 71 MB | mapo debug stats |
+| No-op `just build` | < 10 s | 1.5 s | T0.1 |
+
+### Deviations from the docs
+See the Deviations table below. The main ones:
+- SwiftTerm 1.11.2 instead of GhosttyKit, so `TERM=xterm-256color`.
+- Hand-written Swift protocol types instead of typeshare, and hand-written MCP schemas instead of schemars.
+- A regex highlighter instead of tree-sitter.
+- Waiters live in the tab task.
+- `diff.open` is a new method.
+- `strip = "none"` in the release profile (Xcode 27's `strip` corrupts proc-macro dylibs).
+
+### Blockers
+- ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing it leaves focus on the terminal. Next idea: identify the find field, and check how Escape is delivered to an inactive window.
+- Switch p95 over budget on Release: re-measure with the display awake before tuning. The sample shows an idle main thread, so the time is waiting (the daemon round trip and throttled frames of an occluded window).
+- `ui.click` can't reach sheet buttons, so drives use `ui.press`. A mid-stream `cursor_expired` is sent with a null id, and the app ignores it.
+
+### Needs the user
+Details in the list below:
+1. Decide how helper-session work gets integrated (the classifier refused merges), and review or delete the stale helper branches.
+2. Allow GhosttyKit, and install the Metal Toolchain.
+3. Grant Screen Recording.
+4. Allow notifications for Mapo Dev.
+5. Run the real-Claude steps of M2 and M3 when usage allows.
+
+### Next task
+T5.1 second pass, with the display awake: re-measure switch and reattach on Release, and fix the reattach span to measure app relaunch to painted. Then the Find and Go to Line focus bug, and T3.1's table-driven verb walk. After that, T5.2 and T5.3 with you.
+
 ## Needs the user
 
 - **Allow notifications for "Mapo Dev"** when macOS asks (bundle `dev.mapo.app.dev`), or in System Settings › Notifications. Until then drives see `reason=unauthorized`, and the attention log lines still work.
@@ -39,7 +93,7 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
-- **Fixes after the gates (04:05–04:25).**
+- **Fixes after the gates (04:02–04:06).**
   - The Files segment keeps the last tab's folder while a file or diff pane has focus (R-FS-2). New step in `task-t1-5`, 18/18.
   - `ui.key`'s action router now sends a menu action to the focused view when that view handles it, before looking for a controller up the chain.
   - Still open (time-boxed at 20 min): with the window inactive, ⌘F in an editor opens a find bar whose field isn't in `ui.tree`, and closing it leaves focus on the terminal pane. Go to Line (⌘L) shows no `editor.goToLine` element. Next idea: check whether `window.sendEvent` of Escape reaches the find bar while the window isn't key, and give the find field an identifier.

@@ -8,8 +8,6 @@
 # from the help had a row. Every row lands in rows.tsv in the evidence folder.
 #
 # Known deviations (recorded, not fixed here):
-# - PROTOCOL §9 lists `mapo ui hover|scroll` and `mapo debug latency`; neither the CLI nor the app
-#   implements ui.hover, ui.scroll or a latency probe yet, so they have no rows.
 # - `tab interrupt` on a plain shell tab succeeds: it sends Escape and marks the shell
 #   `agent.interrupted`. PROTOCOL §6 describes it only for agents; whether a shell should get
 #   `conflict` is a spec question.
@@ -229,6 +227,28 @@ ok 'type' '"object"' -- ui metrics
 err 2 invalid_argument any -- ui click
 err 124 timeout any -- ui wait no.such.element --timeout-ms 200
 
+step "ui: hover and scroll (positive dy scrolls the content down)"
+ok '[.ok, (.hovered | index("rail.tab:Parity/a") != null)]' '[true,true]' -- ui hover 'rail.tab:Parity/a'
+ok '[.ok, (.hovered | index("rail.tab:Parity/a") != null)]' '[true,false]' -- ui hover --point 600,400
+err 1 not_found any -- ui hover no.such.element
+LONG=${DRIVE_TMP:a}/long.txt
+seq 1 400 | sed 's/^/line /' > $LONG
+raw file open $LONG > /dev/null
+ED="editor:$LONG"
+raw ui wait "$ED" --timeout-ms 3000 > /dev/null
+edy() { raw ui snapshot | jq --arg e "$ED" '[.. | objects | select(.id? == $e) | .frame.y][0]' }
+y0=$(edy)
+ok '[.ok, .element.id]' "[true,\"$ED\"]" -- ui scroll "$ED" --dy 300
+y1=$(edy)
+ok '.ok' true -- ui scroll "$ED" --dy -100
+y2=$(edy)
+print "   editor text y: $y0, then $y1 after --dy 300, then $y2 after --dy -100"
+jq -n "[$y0 - $y1, $y2 - $y1]" | expect_json . '[300,100]'
+ok '.ok' true -- ui scroll rail --dy 120
+ok '.ok' true -- ui scroll 'pane.terminal:a' --dy -120
+err 2 invalid_argument any -- ui scroll rail
+err 2 invalid_argument any -- ui scroll rail --dy lots
+
 step "Ports and process stop"
 ok 'type' '"array"' -- ports
 ok '.' '[]' -- ports --port 1
@@ -245,6 +265,14 @@ GHOST="drive-t31ghost-$$"
 RAW_INSTANCE=$GHOST text 0 'length' 0 -- instance stop
 ok '.daemon.pid' "$DPID" -- debug stats
 ok '.pid' "$DPID" -- daemon
+raw tab new --name cat > /dev/null
+raw tab wait cat --until idle --timeout-ms 8000 > /dev/null
+raw tab send cat cat > /dev/null
+sleep 0.3
+ok '[.samples, (.attach.p50Ms > 0), (.attach.p95Ms >= .attach.p50Ms), (.attach.p95Ms < 50), (.rawPty.p95Ms > 0), (.p95DiffMs | type)]' \
+    '[200,true,true,true,true,"number"]' -- debug latency --tab cat
+sed "s/^/     /" $DRIVE_TMP/row.out
+err 1 not_found any -- debug latency --tab nope
 text 0 "startswith(\"---\\nname: mapo\\n\")" true -- skill
 print $(raw skill | cmp -s - "$MAPO_ROOT/plugin/skills/mapo/SKILL.md" && print true || print false) | expect_json . true
 err 1 forbidden any -- mcp
@@ -269,6 +297,7 @@ tty 'split("\n")[0:2]' '["main  1 files  +1 −0","M  a.txt  +1 −0"]' -- git c
 tty 'split("\n")[0:2]' '["mapo: Tab \"nope\" not found in workspace \"Parity\"","mapo tab list --workspace '"'"'Parity'"'"'"]' -- tab close nope
 tty '[(split("\n")[0] | fromjson | type), (split("\n") | length)]' '["array",2]' -- tab list --json
 tty 'startswith("error: unrecognized subcommand '"'"'bogus'"'"'")' true -- tab bogus
+tty 'split("\n") | [(.[0] | test("^PROBE +P50 MS +P95 MS +MAX MS$")), (.[3] | test("^p95 difference: [+-][0-9.]+ ms over 20 bytes$"))]' '[true,true]' -- debug latency --tab cat --count 20
 
 step "Every verb from the help had a row"
 verbs=()

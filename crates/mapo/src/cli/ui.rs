@@ -89,6 +89,19 @@ pub enum UiCommand {
         #[arg(long)]
         state: Option<String>,
     },
+    /// Move the synthetic mouse over an element, so its hover affordances show.
+    Hover {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Scroll over an element with a scroll-wheel event.
+    Scroll {
+        #[command(flatten)]
+        target: Target,
+        /// Points to scroll: positive scrolls the content down (reveals what is below), negative up.
+        #[arg(long, allow_negative_numbers = true)]
+        dy: f64,
+    },
     /// Launch, navigation and attach timings.
     Metrics {
         #[arg(long)]
@@ -136,6 +149,11 @@ pub fn run(cli: &Cli, cmd: &UiCommand) -> Result<(), CliError> {
             }
             ("ui.wait", p)
         }
+        UiCommand::Hover { target } => ("ui.hover", json!({ "target": target.to_json()? })),
+        UiCommand::Scroll { target, dy } => (
+            "ui.scroll",
+            json!({ "target": target.to_json()?, "dy": dy }),
+        ),
         UiCommand::Metrics { reset } => (
             "ui.metrics",
             if *reset {

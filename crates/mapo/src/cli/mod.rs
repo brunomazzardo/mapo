@@ -7,6 +7,7 @@ mod file;
 mod git;
 mod hook;
 mod instance;
+mod latency;
 mod pane;
 mod state;
 mod ui;

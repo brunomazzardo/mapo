@@ -47,6 +47,85 @@ struct EventSynthesizer {
         }
     }
 
+    /// Moves the synthetic mouse to a top-left window point. Synthetic events don't move the real cursor, so
+    /// the window server never fires tracking areas for them: instead this finds the tracking areas under the
+    /// point, sends `mouseExited` to owners in `hovered` that the point left, `mouseEntered` to owners it
+    /// reached, and `mouseMoved` to areas that ask for it. Returns the owners now under the mouse.
+    func hover(at point: NSPoint, leaving hovered: [NSResponder]) -> [NSResponder] {
+        let location = ElementGeometry.eventLocation(ofWindowPoint: point, in: window)
+        var inside: [(owner: NSResponder, options: NSTrackingArea.Options)] = []
+        if let root = window.contentView {
+            collectTrackingAreas(in: root, at: location, into: &inside)
+        }
+        let owners = inside.map(\.owner)
+        for owner in hovered where !owners.contains(where: { $0 === owner }) {
+            if let event = enterExitEvent(.mouseExited, at: location) { owner.mouseExited(with: event) }
+        }
+        for (owner, options) in inside {
+            if options.contains(.mouseEnteredAndExited), !hovered.contains(where: { $0 === owner }),
+                let event = enterExitEvent(.mouseEntered, at: location)
+            {
+                owner.mouseEntered(with: event)
+            }
+            if options.contains(.mouseMoved),
+                let event = mouseEvent(.mouseMoved, at: location, clickCount: 0, modifiers: [])
+            {
+                owner.mouseMoved(with: event)
+            }
+        }
+        return owners
+    }
+
+    /// Visible views' tracking areas that contain `location` (window base coordinates), outermost first.
+    /// The areas' `active…` options are ignored: a drive usually runs with the app inactive.
+    private func collectTrackingAreas(
+        in view: NSView, at location: NSPoint, into found: inout [(owner: NSResponder, options: NSTrackingArea.Options)]
+    ) {
+        guard !view.isHidden, view.alphaValue > 0 else { return }
+        let local = view.convert(location, from: nil)
+        for area in view.trackingAreas {
+            let rect = area.options.contains(.inVisibleRect) ? view.visibleRect : area.rect
+            guard let owner = area.owner as? NSResponder, view.isMousePoint(local, in: rect),
+                !found.contains(where: { $0.owner === owner })
+            else { continue }
+            found.append((owner, area.options))
+        }
+        for subview in view.subviews { collectTrackingAreas(in: subview, at: location, into: &found) }
+    }
+
+    private func enterExitEvent(_ type: NSEvent.EventType, at location: NSPoint) -> NSEvent? {
+        NSEvent.enterExitEvent(
+            with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: Self.nextEventNumber(), trackingNumber: 0,
+            userData: nil)
+    }
+
+    /// Scrolls with a pixel-unit scroll-wheel event at a top-left window point. Positive `dy` scrolls the
+    /// content down, revealing what is below, like dragging a scroller down; the event's own delta is `-dy`.
+    func scroll(at point: NSPoint, dy: Double) {
+        let location = ElementGeometry.eventLocation(ofWindowPoint: point, in: window)
+        let wheel = Int32(clamping: Int((-dy).rounded()))
+        guard
+            let cgEvent = CGEvent(
+                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: wheel, wheel2: 0, wheel3: 0)
+        else { return }
+        // CGEvent locations are global, with the origin at the top left of the primary display.
+        let screen = window.convertPoint(toScreen: location)
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        cgEvent.location = CGPoint(x: screen.x, y: primaryHeight - screen.y)
+        cgEvent.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+        cgEvent.setIntegerValueField(
+            .mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+        guard let event = NSEvent(cgEvent: cgEvent) else { return }
+        if event.window === window {
+            window.sendEvent(event)
+        } else if let content = window.contentView,
+            let view = content.hitTest(content.superview?.convert(location, from: nil) ?? location)
+        {
+            view.scrollWheel(with: event)
+        }
+    }
+
     private func mouseEvent(
         _ type: NSEvent.EventType, at location: NSPoint, in target: NSWindow? = nil, clickCount: Int,
         modifiers: KeyModifiers

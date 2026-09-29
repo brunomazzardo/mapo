@@ -1,5 +1,6 @@
 //! `mapo debug stats`: CPU time and physical footprint of this instance's daemon and app,
-//! read with proc_pid_rusage from the pid files (ENGINEERING §6).
+//! read with proc_pid_rusage from the pid files (ENGINEERING §6). `mapo debug latency` lives in
+//! `latency.rs`.
 
 use std::time::Duration;
 
@@ -15,6 +16,15 @@ pub enum DebugCommand {
     Stats {
         #[arg(long = "interval-ms")]
         interval_ms: Option<u64>,
+    },
+    /// Keystroke-echo latency through an attach connection to a tab running cat, against a raw PTY.
+    Latency {
+        /// The tab, by id or name; it must be running cat.
+        #[arg(long)]
+        tab: String,
+        /// How many single bytes to time on each probe.
+        #[arg(long, default_value_t = 200)]
+        count: usize,
     },
 }
 
@@ -56,7 +66,10 @@ fn pid_of(path: &std::path::Path) -> Option<i32> {
 }
 
 pub fn run(cli: &Cli, cmd: &DebugCommand) -> Result<(), CliError> {
-    let DebugCommand::Stats { interval_ms } = cmd;
+    let interval_ms = match cmd {
+        DebugCommand::Stats { interval_ms } => interval_ms,
+        DebugCommand::Latency { tab, count } => return super::latency::run(cli, tab, *count),
+    };
     let instance = cli.resolve_instance()?;
     let paths = instance.paths().map_err(from_instance)?;
     let procs = [

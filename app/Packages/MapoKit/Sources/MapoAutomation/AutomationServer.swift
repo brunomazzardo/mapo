@@ -12,6 +12,8 @@ public final class AutomationServer {
     /// More `ui.snapshot` model fields from the app: `view` (font size, columns, palette) and `commands`
     /// (the command table, the checklist `drives/task-t1-8.sh` walks).
     public var snapshotModel: (() -> [String: JSONValue])?
+    /// The tracking-area owners the synthetic mouse of `ui.hover` is over, so the next hover exits them.
+    private let hovered = NSHashTable<NSResponder>.weakObjects()
 
     public init(store: AppStore, metrics: UIMetrics, window: @escaping () -> NSWindow?) {
         self.store = store
@@ -34,6 +36,8 @@ public final class AutomationServer {
             case "ui.type": result = try type(params)
             case "ui.key": result = try key(params)
             case "ui.wait": result = try await wait(params)
+            case "ui.hover": result = try await hover(params)
+            case "ui.scroll": result = try await scroll(params)
             case "ui.metrics": result = try metricsResult(params)
             default:
                 throw RPCError.make(.invalidArgument, "The app doesn't handle \(request.method)")
@@ -122,25 +126,45 @@ public final class AutomationServer {
         let button = try params.enumValue("button", EventSynthesizer.MouseButton.self) ?? .left
         let count = try params.int("count", in: 1...3) ?? 1
         let modifiers = try params.modifiers("modifiers")
-
-        let point: NSPoint
-        let element: UIElement?
-        if case .point(let location) = target {
-            point = location
-            element = ElementTreeBuilder(window: window).build().deepest(at: location)
-        } else {
-            let found = try await resolveSoon(target, in: window)
-            let frame = scrollIntoView(found, in: window)
-            let visible = frame.intersection(NSRect(origin: .zero, size: window.frame.size))
-            guard !visible.isEmpty else {
-                throw RPCError.make(
-                    .conflict, "\(found.name) is outside the window", details: ["frame": frame.json])
-            }
-            point = NSPoint(x: visible.midX, y: visible.midY)
-            element = found
-        }
+        let (point, element) = try await location(of: target, in: window, reveal: true)
         await EventSynthesizer(window: window).click(at: point, button: button, count: count, modifiers: modifiers)
         return .object(["ok": .bool(true), "element": element?.summary ?? .null])
+    }
+
+    /// Moves the synthetic mouse over the target, so hover affordances show until the next hover elsewhere.
+    private func hover(_ params: Params) async throws -> JSONValue {
+        try params.allow(["target"])
+        let window = try mainWindow()
+        let (point, element) = try await location(
+            of: try UITarget(try params.require("target")), in: window, reveal: true)
+        // A revealed rail row gets its row view when the table next tiles: let one display pass run first.
+        window.displayIfNeeded()
+        try? await Task.sleep(for: .milliseconds(20))
+        let owners = EventSynthesizer(window: window).hover(at: point, leaving: hovered.allObjects)
+        hovered.removeAllObjects()
+        for owner in owners { hovered.add(owner) }
+        // What now shows hover: each owner's identifier, else its class, so a drive can check the effect.
+        let names = owners.map { owner -> JSONValue in
+            let id = (owner as? NSView)?.accessibilityIdentifier() ?? ""
+            return .string(id.isEmpty ? String(describing: Swift.type(of: owner)) : id)
+        }
+        return .object([
+            "ok": .bool(true), "element": element.map { .object($0.reference) } ?? .null, "hovered": .array(names),
+        ])
+    }
+
+    /// A pixel scroll-wheel event over the target; positive `dy` scrolls the content down (PROTOCOL §6.8).
+    private func scroll(_ params: Params) async throws -> JSONValue {
+        try params.allow(["target", "dy"])
+        let window = try mainWindow()
+        guard let dy = try params.require("dy").doubleValue, dy.isFinite, abs(dy) <= 100_000 else {
+            throw RPCError.make(.invalidArgument, "dy must be a number of points from -100000 to 100000")
+        }
+        let (point, element) = try await location(
+            of: try UITarget(try params.require("target")), in: window, reveal: false)
+        EventSynthesizer(window: window).scroll(at: point, dy: dy)
+        window.layoutIfNeeded()
+        return .object(["ok": .bool(true), "element": element.map { .object($0.reference) } ?? .null])
     }
 
     private func press(_ params: Params) async throws -> JSONValue {
@@ -283,6 +307,23 @@ public final class AutomationServer {
     }
 
     private static let resolveGrace = Duration.seconds(1)
+
+    /// The window point a pointer action aims at: a point target as given, or the middle of the element's
+    /// visible part. With `reveal`, a row in a scroll view is scrolled into view first.
+    private func location(of target: UITarget, in window: NSWindow, reveal: Bool) async throws -> (
+        NSPoint, UIElement?
+    ) {
+        if case .point(let point) = target {
+            return (point, ElementTreeBuilder(window: window).build().deepest(at: point))
+        }
+        let found = try await resolveSoon(target, in: window)
+        let frame = reveal ? scrollIntoView(found, in: window) : found.frame
+        let visible = frame.intersection(NSRect(origin: .zero, size: window.frame.size))
+        guard !visible.isEmpty else {
+            throw RPCError.make(.conflict, "\(found.name) is outside the window", details: ["frame": frame.json])
+        }
+        return (NSPoint(x: visible.midX, y: visible.midY), found)
+    }
 
     /// Scrolls the element's view into its scroll view, such as a rail row, and returns its fresh frame.
     private func scrollIntoView(_ element: UIElement, in window: NSWindow) -> NSRect {

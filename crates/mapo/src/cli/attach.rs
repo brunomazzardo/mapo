@@ -38,11 +38,11 @@ const RECONNECT_FOR: Duration = Duration::from_secs(30);
 const PING_EVERY: Duration = Duration::from_secs(15);
 const PONG_WITHIN: Duration = Duration::from_secs(45);
 
-struct Size {
-    cols: u16,
-    rows: u16,
-    width_px: u16,
-    height_px: u16,
+pub(super) struct Size {
+    pub(super) cols: u16,
+    pub(super) rows: u16,
+    pub(super) width_px: u16,
+    pub(super) height_px: u16,
 }
 
 fn parse_size(s: &str) -> Option<Size> {
@@ -128,12 +128,17 @@ fn log(instance: &Instance, line: &str) {
     }
 }
 
-enum Connected {
+pub(super) enum Connected {
     Attached(OwnedReadHalf, OwnedWriteHalf, Vec<u8>),
 }
 
 /// One connection attempt: hello as attach, reading `app.token` fresh (tokens rotate per boot).
-async fn connect(instance: &Instance, tab: &str, size: &Size) -> Result<Connected, RpcError> {
+pub(super) async fn connect(
+    instance: &Instance,
+    tab: &str,
+    workspace: Option<&str>,
+    size: &Size,
+) -> Result<Connected, RpcError> {
     let paths = instance.paths().map_err(from_instance)?;
     let token = mapo_instance::read_token(&paths.token)
         .map_err(|_| RpcError::unavailable(format!("no daemon for instance {}", instance.name)))?;
@@ -151,7 +156,7 @@ async fn connect(instance: &Instance, tab: &str, size: &Size) -> Result<Connecte
         },
         attach: Some(AttachHello {
             tab: tab.to_owned(),
-            workspace: None,
+            workspace: workspace.map(str::to_owned),
             cols: size.cols,
             rows: size.rows,
             width_px: size.width_px,
@@ -244,7 +249,7 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
         let mut backoff = Duration::from_millis(100);
         let conn = loop {
             let size = terminal_size(&args.size);
-            match connect(&instance, &args.tab, &size).await {
+            match connect(&instance, &args.tab, None, &size).await {
                 Ok(c) => break Some(c),
                 Err(e) if e.kind() == ErrorKind::NotFound => {
                     log(&instance, "tab closed");

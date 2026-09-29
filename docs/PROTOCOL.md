@@ -192,8 +192,8 @@ Every `ui.*` method is routed to the most recently registered app of the instanc
 | `ui.type` | `{text}` → `{ok:true}` (key events to the first responder) | M0 |
 | `ui.key` | `{chord:"cmd+t"\|"cmd+shift+n"\|"escape"\|…, phase?:"press"\|"down"\|"up"}` → `{ok:true}` (goes through menus and key equivalents; `down`/`up` let a drive hold ⌘ to reveal shortcut hints) | M0 |
 | `ui.wait` | `{target, state?:"exists"\|"gone"\|"focused"\|"enabled", timeoutMs?:5000}` → `{element}` | M0 |
-| `ui.hover` | `{target}` → `{ok:true}` | M1 |
-| `ui.scroll` | `{target, dy}` → `{ok:true}` | M1 |
+| `ui.hover` | `{target}` → `{ok:true, element, hovered:[string]}`. Moves the synthetic mouse to the middle of the target (a rail or Files row is scrolled into view first): tracking-area owners it left get `mouseExited`, those it reached get `mouseEntered` (and `mouseMoved` when they ask), and hover stays until the next `ui.hover`. `hovered` names the owners now under the mouse by identifier, else by class. | M1 |
+| `ui.scroll` | `{target, dy}` → `{ok:true, element}`. One pixel-unit scroll-wheel event over the middle of the target's visible part. `dy` is in points; positive scrolls the content down (reveals what is below, like dragging the scroller down), negative up. | M1 |
 | `ui.metrics` | `{reset?:bool}` → `{launch:{processStartToFirstFrameMs}, navigation:[{name, ms}], frames:{p50Ms, p95Ms, dropped}, attach:{lastMs}}` | M0 (basic) / M5 (full) |
 
 A `Target` is one of:

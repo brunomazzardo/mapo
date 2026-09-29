@@ -1,0 +1,15 @@
+[package]
+name = "mapo-proc"
+description = "Process trees per tab, listening ports, process identities and safe stop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libproc = "=0.14.11"
+libc.workspace = true
+serde.workspace = true

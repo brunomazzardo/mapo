@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[workspace.dependencies]
+mapo-protocol = { path = "crates/mapo-protocol" }
+mapo-instance = { path = "crates/mapo-instance" }
+mapo-core = { path = "crates/mapo-core" }
+mapo-term = { path = "crates/mapo-term" }
+mapo-git = { path = "crates/mapo-git" }
+mapo-agent = { path = "crates/mapo-agent" }
+mapo-proc = { path = "crates/mapo-proc" }
+mapo-mcp = { path = "crates/mapo-mcp" }
+
+tokio = { version = "1.53", features = ["rt-multi-thread", "rt", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "process", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+clap = { version = "4.6", features = ["derive", "env"] }
+uuid = { version = "1.26", features = ["v7", "serde"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+base64 = "0.23"
+getrandom = "0.4"
+libc = "0.2"
+rustix = { version = "1.1.5", features = ["fs", "process", "termios"] }
+pty-process = { version = "=0.5.3", features = ["async"] }
+alacritty_terminal = "=0.26.0"
+typeshare = "1.0.2"
+ignore = "0.4.33"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
+rmcp = { version = "=3.5.0", default-features = false, features = ["server"] }
+
+# Cargo's release default strips debuginfo, and this machine's strip (Xcode 27) leaves proc-macro
+# dylibs the loader rejects ("mis-aligned LINKEDIT string pool"). Keep symbols; LTO stays thin.
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = "none"
+
+[profile.release.build-override]
+strip = "none"

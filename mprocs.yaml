@@ -1,0 +1,12 @@
+# Started by `just dev`, which exports MAPO_DEV_INSTANCE and MAPO_DEV_PROFILE.
+# No `server:` key: it makes mprocs listen on TCP (R-ENG-3). Nothing here serves HTTP, so no portless.
+procs:
+  daemon:
+    shell: "just daemon"
+    stop: SIGTERM
+  app:
+    shell: "just app --no-spawn-daemon"
+    stop: SIGTERM
+  events:
+    shell: "just mapo events --follow"
+    autostart: false

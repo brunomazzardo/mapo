@@ -1,0 +1,4 @@
+# task-t1-9: dark, glass on (PLAN T1.9)
+[ui]
+appearance = "dark"
+reduce-transparency = "off"

@@ -1,0 +1,9 @@
+{
+  "client": "Mapo/0.1.0",
+  "credential": {
+    "kind": "app",
+    "token": "TOKEN"
+  },
+  "protocol": 1,
+  "role": "app"
+}

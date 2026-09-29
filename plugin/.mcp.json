@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "mapo": { "command": "mapo", "args": ["mcp"] }
+  }
+}

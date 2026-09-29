@@ -1,0 +1,12 @@
+{
+  "bootId": "0199a3c0-0000-7000-8000-000000000000",
+  "caller": {
+    "kind": "app"
+  },
+  "daemon": "0.1.0",
+  "features": [
+    "events"
+  ],
+  "instance": "dev-mapo-native",
+  "protocol": 1
+}

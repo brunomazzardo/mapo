@@ -1,0 +1,3 @@
+# Terminal and Xcode builds must agree on the deployment target, or each invalidates the other.
+[env]
+MACOSX_DEPLOYMENT_TARGET = { value = "26.0", force = true }

@@ -105,6 +105,7 @@ Machine, verified 2026-09-28:
 
 - **Roles.** The session that runs the `/goal` is the **coordinator**. It owns the plan order, merges, drives and PROGRESS.md.
 - **Workers.** For the first overnight run (2026-09-28) the user created five extra Claude sessions for the coordinator to use: `mapo-bf`, `mapo-2b`, `mapo-02`, `mapo-07`, `mapo-30`.
+- **Run of 2026-09-28/29.** The session `mapo-native` never processed its kickoff: the message sat in its queue and the session stayed "waiting". At 23:40, `mapo-32` made **`mapo-bf` the coordinator**. The workers are `mapo-2b`, `mapo-02`, `mapo-07` and `mapo-30`, plus Opus subagents. If `mapo-native` wakes up later, it must not start a second run; it asks `mapo-bf` for a task instead.
   - Find them with `ListAgents`, and hand them tasks with `SendMessage`.
   - Opus subagents (the Agent tool) are also allowed.
   - Keep at most five workers active at once, so builds don't starve each other. Don't use other sessions the user didn't list (for example `mapo-22` and `mapo-fe`); they belong to other work.

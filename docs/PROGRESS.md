@@ -4,6 +4,8 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## Needs the user
 
+- Session `mapo-native` never processed its kickoff: the cross-session message stayed queued and the session stayed "waiting", probably blocked on something in its UI. The overnight run was moved to `mapo-bf` as coordinator (HANDOFF §7). Check what `mapo-native` was waiting on.
+
 - Before the first overnight run, do the HANDOFF §4 pre-flight: Screen Recording for the terminal app that runs the agent, and permissions for the agent session.
 
 ## 2026-09-28: specs written, no code yet

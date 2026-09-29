@@ -316,8 +316,12 @@ SwiftUI is only for the ⌘K palette (in an `NSPanel`), settings, popovers and h
     func setVisible(_ visible: Bool)
     var onTitle: ((String) -> Void)? { get set }   // UI hint only; daemon is the source of truth
     var onBell: (() -> Void)? { get set }
+    var onExit: ((Int32?) -> Void)? { get set }    // the child exited on its own; the host shows the scrim
+    func close()                                   // stop the child; build a new surface to reattach
 }
 ```
+
+- **`TerminalHostView`** is a pane's terminal body: the tab's current surface plus the "Disconnected" scrim (UX §4.3). It outlives surfaces, so Reconnect swaps the surface in place. **`SurfaceRegistry`** keeps one host per tab id until the tab closes, so re-layout never rebuilds a surface.
 
 - **`GhosttySurfaceView`** hosts a `ghostty_surface_t` configured with:
   - `command = "<bundle>/Contents/Helpers/mapo attach --tab <id> --instance <I>"`

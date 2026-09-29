@@ -4,17 +4,28 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-29 morning report
 
-Run: started 23:35, written at 04:10 America/Sao_Paulo. The account's usage limit stopped everything from 02:04 to 03:00. Coordinator `mapo-bf`. Code was written on `native` by the coordinator and by its own Opus subagents, 2–3 at a time, each working in its own area of the tree. The four helper sessions' branches were not merged (see Needs the user).
+Run: started 23:35, written at 04:10 and updated at 05:00 America/Sao_Paulo. The account's usage limit stopped everything from 02:04 to 03:00. Coordinator `mapo-bf`. Code was written on `native` by the coordinator and by its own Opus subagents, 2–3 at a time, each working in its own area of the tree. The four helper sessions' branches were not merged (see Needs the user).
 
 Summary: M0, M1, M2 (synthetic path), M3 (without real Claude) and M4 are built, and every milestone gate drive passes. T5.1 ran once on a Release build. What to try first: `cd ~/code/mapo-native && just app`. You get the S2 rail, tiling panes (⌘D, ⇧⌘D), SwiftTerm terminals served by the daemon that survive ⌘Q and relaunch, ⌘K, Files and Changes (⌥⌘0), and the editor. Try `mapo tab send`, `mapo tab run`, `mapo tab ask` and `mapo mcp` from inside a tab.
+
+### After 04:12
+Every item mapo-32 listed is done, and each one was driven and committed:
+1. **Find and Go to Line focus:** Escape now keeps focus in the editor (`task-t1-6`).
+2. **T3.1:** `task-t3-1` walks all 59 verbs, PASS 129/129. It found and fixed JSON usage errors, `--tab-id`, and `attach` error output. It also added the missing `ui hover`, `ui scroll` and `debug latency`. Latency proxy: attach p95 is 0.06 ms over a raw PTY.
+3. **Spec gaps:**
+   - Tree-sitter highlighting for all 15 R-ED-2 languages (SwiftTreeSitter, no Neon; the dependency fetch was allowed). `file.open` for 2,000 lines is 62 ms.
+   - Set Agent Command…, plus New Tab in Folder… and Set Agent Command… in the rail's workspace menu.
+4. **Real Claude, once, in an empty temp folder:** hooks drive the status, and `tab ask` returned PONG in 1.8 s.
+
+Gates after the changes: `m0-skeleton` 17/17, `m1-daily` 16/16, `task-t1-6` 15/15, `task-t1-8` 79/79, `task-t3-1` 129/129, `m3-control` 9/9, `task-t3-5` 18/18. Nothing is running, the stopped `drive-*` instances are cleaned, the `native-ts` worktree is removed, and the tree is clean.
 
 ### What works
 | Area | Status | Gate or drive | Notes |
 |---|---|---|---|
 | M0: daemon, instances, PTY tabs, zsh integration, `mapo attach`, app skeleton, `mapo ui` | done | m0-skeleton PASS 17/17 | The terminal engine is SwiftTerm, the documented fallback: GhosttyKit acquisition was refused |
 | M1: S2 rail, status, tiling panes, switching, Files, editor, ⌘K, keymap table, Mapo Glass | done | m1-daily PASS 16/16; task-t1-1..9 PASS | Find and Go to Line focus fixed at 04:20 |
-| M2: plugin, `mapo hook`, agent status machine, agent tabs, interrupt, resume, attention | done on the synthetic path | m2-agents PASS 27/27; task-t2-2, task-t2-4 PASS | No real Claude was run |
-| M3: activity log, `tab ask`, `events.wait`, `mapo mcp` (32 tools), skill | done | m3-control PASS 9/9; task-t3-1 PASS 116/116; task-t3-5 PASS | `tab ask` verified synthetically only |
+| M2: plugin, `mapo hook`, agent status machine, agent tabs, interrupt, resume, attention | done on the synthetic path | m2-agents PASS 27/27; task-t2-2, task-t2-4 PASS | Real Claude checked once by hand (04:33): hooks drive the status |
+| M3: activity log, `tab ask`, `events.wait`, `mapo mcp` (32 tools), skill | done | m3-control PASS 9/9; task-t3-1 PASS 129/129; task-t3-5 PASS | `tab ask` returned PONG from real Claude once; needs-you is synthetic only |
 | M4: server detection, ports and stop, Changes, diff, gutter | done | m4-servers-changes PASS 27/27 | |
 | T5.1: performance pass | first run | m5-switch PASS | Two misses, below |
 
@@ -49,15 +60,16 @@ Details in the list below:
 2. Allow GhosttyKit, and install the Metal Toolchain.
 3. Grant Screen Recording.
 4. Allow notifications for Mapo Dev.
-5. Run the real-Claude steps of M2 and M3 when usage allows.
+5. Run the rest of the real-Claude steps when usage allows: needs-you (exit 5) and `--timeout-ms` with real Claude, and Claude using the MCP tools. Hooks and one `tab ask` were checked at 04:33.
+6. Spec questions: should `tab interrupt` on a shell tab be `conflict`? Is Close showing on hover over the whole pane (not just the header) intended? While Claude asks whether to trust a new folder, the tab shows Working (the shell's guess), because hooks start only after that question. Should it read Needs you?
 
 ### Next task
-T5.1 second pass, with the display awake: re-measure switch and reattach on Release, and fix the reattach span to measure app relaunch to painted. Then the Find and Go to Line focus bug, and T3.1's table-driven verb walk. After that, T5.2 and T5.3 with you.
+T5.1 second pass, with the display awake: re-measure switch and reattach on Release, and fix the reattach span to measure app relaunch to painted. Then T5.2 and T5.3 with you (Typometer against Ghostty).
 
 ## Needs the user
 
 - **Allow notifications for "Mapo Dev"** when macOS asks (bundle `dev.mapo.app.dev`), or in System Settings › Notifications. Until then drives see `reason=unauthorized`, and the attention log lines still work.
-- **Real-Claude drive steps for M2 weren't run tonight.** The account hit its usage limit at 02:04, so the coordinator ran only the synthetic hook path (fixtures through `mapo hook`). With usage to spare, run the M2 real-Claude steps from PLAN §5 (a harmless prompt in `$DRIVE_TMP`, trust, interrupt, resume with PAPAYA).
+- **Most real-Claude drive steps for M2 weren't run tonight.** The account hit its usage limit at 02:04, so the drives use the synthetic hook path (fixtures through `mapo hook`). At 04:33, one check by hand confirmed hooks and a PONG `tab ask`. With usage to spare, run the M2 real-Claude steps from PLAN §5 (a harmless prompt in `$DRIVE_TMP`, trust, interrupt, resume with PAPAYA).
 - **Merging helper branches into `native` is blocked (decide how integration should work).** At 00:05 on 2026-09-29, the coordinator's auto-mode classifier refused to cherry-pick mapo-30's T0.3 commits (`native-daemon`: e8381971bde, 217a57820d7) onto `native` and run their drive, as "Untrusted Code Integration". Nobody retried it or worked around it, and no other session was asked to merge. Earlier, 29d43a8 (mapo-2b's SwiftTerm surface, from `native-surface` 7f190378bee) had already been cherry-picked, built and unit-tested on `native` before the refusal. It is kept; revert it with `git revert 29d43a8` if you prefer. The helpers keep committing on their own branches (`native-daemon`, `native-termcore`, `native-app`, `native-surface`) without cross-merging. To continue, review and merge them yourself (`git merge --ff-only` or `git cherry-pick` in ~/code/mapo-native), or allow the coordinator to integrate helper commits.
 - **Allow acquiring GhosttyKit** (the prebuilt libghostty-spm pin from PLAN T0.8, or a Zig 0.16 source build) so T0.8 can move from SwiftTerm to Ghostty (D-13; goal: terminal quality). On 2026-09-28 at 23:40 the coordinator's auto-mode permission classifier refused the prebuilt download as "Untrusted Code Integration". Tonight's run uses the SwiftTerm fallback behind `TerminalSurface`, and nobody retried the download or worked around the refusal.
 - **Install the Metal Toolchain?** (`xcodebuild -downloadComponent MetalToolchain`, an Apple component outside Homebrew and cargo, so HANDOFF §6.4 leaves it to you). SwiftTerm 1.12 and later compile a Metal shader and fail without it, so the fallback is pinned to SwiftTerm 1.11.2 (CoreGraphics renderer). Moving to 1.20.0 is a one-line change once it's installed.
@@ -79,7 +91,7 @@ T5.1 second pass, with the display awake: re-measure switch and reattach on Rele
 | T1.5 | UX §2.1 | Inspector segments in the toolbar | Segments sit at the top of the inspector content | The fallback UX §2.1 allows |
 | T1.5 | ARCHITECTURE §3.7 | Watching | Non-recursive watches per shown folder, plus a 5 s status cache expiry | Recursive watches on large trees are costly; collapsed subfolders refresh through the expiry |
 | M1 | ENGINEERING §4.3 | Panel toggles animate | `toggleSidebar` and `toggleInspector` flip `isCollapsed` directly when the window is occluded | AppKit never finishes the collapse animation for an occluded window, so drives couldn't toggle panels |
-| T1.6 | PLAN T1.6, D-14 | Tree-sitter highlighting (SwiftTreeSitter and Neon) | SwiftTreeSitter without Neon, for all fifteen R-ED-2 languages (2026-09-29, branch `native-ts`). The regex highlighter stays only to color a file's first screen while its grammar's query compiles | A whole-buffer reparse off the main thread is fast enough; Neon's incremental parsing can come later behind the same interface |
+| T1.6 | PLAN T1.6, D-14 | Tree-sitter highlighting (SwiftTreeSitter and Neon) | SwiftTreeSitter without Neon, for all fifteen R-ED-2 languages (2026-09-29, cherry-picked from a subagent worktree). The regex highlighter stays only to color a file's first screen while its grammar's query compiles | A whole-buffer reparse off the main thread is fast enough; Neon's incremental parsing can come later behind the same interface |
 | T1.7 | UX §10 | SwiftUI palette | The hosting view vends its accessibility children itself | SwiftUI builds its AX tree only for assistive apps, so `ui.tree` couldn't see the field or rows |
 | T1.9 | UX §9 | Glass everywhere | `[ui] reduce-transparency = "off"` can't undo the system setting for system glass | System glass follows the system setting |
 | T0.8 | PLAN T0.8 fallback | SwiftTerm "from 1.20.0" | SwiftTerm exactly 1.11.2 | 1.12+ needs the Metal Toolchain, which isn't installed (see Needs the user) |

@@ -127,11 +127,39 @@ snap STEP="manual": guard
 
 # Stop this instance's app and daemon.
 kill: guard
-    @echo "not yet: PLAN T0.2" >&2; exit 1
+    #!/bin/zsh
+    set -euo pipefail
+    if [[ ! -x {{bin}} ]]; then echo "{{bin}} is missing: run just build" >&2; exit 1; fi
+    runtime=$({{bin}} --instance {{instance}} instance show --json | jq -r .runtimeDir)
+    pidfile="$runtime/{{instance}}.app.pid"
+    if [[ -f "$pidfile" ]]; then
+        pid=$(sed -n 1p "$pidfile")
+        # Only a Mapo.app of this build family, named by this instance's pid file (ENGINEERING §2.8).
+        if [[ -n "$pid" ]] && ps -p "$pid" -o comm= 2>/dev/null | grep -q 'Mapo.app/Contents/MacOS/Mapo$'; then
+            kill -TERM "$pid" 2>/dev/null || true
+            for _ in {1..50}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+            kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    {{bin}} --instance {{instance}} instance stop
 
-# Stop an instance and delete its data.
-clean-instance NAME="": guard
-    @echo "not yet: PLAN T0.2" >&2; exit 1
+# Stop an instance and delete its data. NAME may be a glob such as 'drive-*'.
+clean-instance NAME="":
+    #!/bin/zsh
+    set -euo pipefail
+    if [[ ! -x {{bin}} ]]; then echo "{{bin}} is missing: run just build" >&2; exit 1; fi
+    pattern="${1:-{{instance}}}"
+    if [[ "$pattern" == main ]]; then echo "refusing instance main" >&2; exit 1; fi
+    if [[ "$pattern" != *[*?]* ]]; then
+        just instance="$pattern" kill
+        exec {{bin}} --instance "$pattern" instance clean
+    fi
+    {{bin}} instance list --json | jq -r '.[] | [.name, (.daemon.running or .app.running)] | @tsv' |
+    while IFS=$'\t' read -r name running; do
+        [[ "$name" == ${~pattern} && "$name" != main ]] || continue
+        if [[ "$running" == true ]]; then echo "skipped $name: running"; continue; fi
+        {{bin}} --instance "$name" instance clean && echo "cleaned $name"
+    done
 
 # Format Rust and Swift sources.
 fmt:

@@ -10,3 +10,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
+getrandom.workspace = true
+libc.workspace = true
+rustix.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

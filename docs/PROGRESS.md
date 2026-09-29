@@ -24,6 +24,23 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **T0.10 done (isolation proof).** Setup was a fresh worktree `../mapo-native-iso` (`native-iso`): `just setup` took under 5 s, and its cold `just build` took 27 s while main rebuilt in 6 s. Both instances ran at once:
+
+  | | dev-mapo-native | dev-mapo-native-iso |
+  |---|---|---|
+  | Window title | "… (dev-mapo-native)" | "Only-Iso (dev-mapo-native-iso)" |
+  | Workspaces | Alpha, Only-Main | Only-Iso |
+  | Socket, lock, pid files | `dev-mapo-native.*` | `dev-mapo-native-iso.*` |
+  | Data dir | `…/instances/dev-mapo-native` | `…/instances/dev-mapo-native-iso` |
+
+  Results:
+  - Nothing listens on TCP.
+  - `just kill` in iso stopped only iso; main kept answering ping.
+  - `just app` rebuilt and restarted only the app; the shell's pid stayed 62093.
+  - `just drive m0-skeleton` passed 17/17 in the fresh worktree too (P4).
+  - The worktree, its instance and its branch were removed afterwards.
+
+  GhosttyKit cache reuse is not applicable tonight.
 - **T0.11 done: M0 gate PASS.** `just drive m0-skeleton` PASS 17/17 (9 steps), evidence `evidence/m0-skeleton/20260929-010224`:
   - ⇧⌘N 86 ms, ⌘T to first prompt 207 ms (the user's zsh startup), launch 260 ms, relaunch 260 ms, app.reattach 271 ms after a daemon restart, attach replay 2 ms
   - footprints with 3 tabs: daemon 10.6 MB, app 123 MB

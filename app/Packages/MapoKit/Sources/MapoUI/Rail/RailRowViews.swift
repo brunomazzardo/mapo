@@ -6,6 +6,8 @@ enum RailMetrics {
     static let padding: CGFloat = 10
     static let tabIndent: CGFloat = 26
     static let radius: CGFloat = 6
+    /// The hold-⌘ hint column (UX §3.3).
+    static let hintWidth: CGFloat = 22
 }
 
 /// A rail row's background and accessibility element. The row, not its cell, carries the identifier, the
@@ -90,6 +92,7 @@ final class RailCellView: NSTableCellView {
     private let name = NSTextField(labelWithString: "")
     private let secondary = NSTextField(labelWithString: "")
     private let accessory = RailAccessoryView()
+    private let hint = NSTextField(labelWithString: "")
     private let button = NSButton(title: "New Workspace", target: nil, action: nil)
     private var row: RailRow?
 
@@ -97,7 +100,9 @@ final class RailCellView: NSTableCellView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        for label in [name, secondary] {
+        hint.alignment = .right
+        hint.font = .systemFont(ofSize: 11)
+        for label in [name, secondary, hint] {
             label.lineBreakMode = .byTruncatingTail
             label.cell?.truncatesLastVisibleLine = true
             label.setAccessibilityElement(false)
@@ -132,7 +137,7 @@ final class RailCellView: NSTableCellView {
         button.isHidden = row.kind != .newWorkspaceButton
         glyph.isHidden = true
         secondary.isHidden = true
-        name.isHidden = row.kind == .newWorkspaceButton
+        name.isHidden = row.kind == .newWorkspaceButton || row.kind == .gap
         name.stringValue = row.text
         switch row.kind {
         case .header:
@@ -141,7 +146,7 @@ final class RailCellView: NSTableCellView {
         case .noTabs, .noWorkspaces:
             name.font = .systemFont(ofSize: 12.5)
             name.textColor = Tokens.textSecondary
-        case .newWorkspaceButton:
+        case .newWorkspaceButton, .gap:
             break
         case .workspace(let expanded, let active):
             glyph.isHidden = false
@@ -165,8 +170,44 @@ final class RailCellView: NSTableCellView {
             name.textColor = Self.nameColor(tint: row.tint, selected: selected)
         }
         accessory.configure(row.accessory, selected: row.isSelected)
+        configureHint(row.hint, selected: row.isSelected)
         needsLayout = true
     }
+
+    /// Shows or hides the ⌘ hint, fading it in over 120 ms unless Reduce Motion is on (UX §9.3).
+    private func configureHint(_ text: String?, selected: Bool) {
+        hint.textColor = selected ? Tokens.textSecondaryOnSelection : Tokens.textSecondary
+        guard let text else {
+            hint.isHidden = true
+            return
+        }
+        let appearing = hint.isHidden
+        hint.stringValue = text
+        hint.isHidden = false
+        guard appearing, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            hint.alphaValue = 1
+            return
+        }
+        hint.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            hint.animator().alphaValue = 1
+        }
+    }
+
+    /// Where the name sits, in the cell's coordinates, and the width it may grow to; the rename field
+    /// takes this place (UX §3.4).
+    var nameEditingFrame: NSRect {
+        layoutSubtreeIfNeeded()
+        var frame = name.frame
+        frame.size.width = max(frame.width, nameMaxX - frame.minX)
+        return frame
+    }
+
+    var nameFont: NSFont? { name.font }
+
+    private var nameMaxX: CGFloat = 0
 
     private static func nameColor(tint: RailTone?, selected: Bool) -> NSColor {
         switch tint {
@@ -201,10 +242,19 @@ final class RailCellView: NSTableCellView {
         default:
             break
         }
+        var accessoryEnd = trailing
+        if !hint.isHidden {
+            let hintHeight = ceil(hint.intrinsicContentSize.height)
+            hint.frame = NSRect(
+                x: trailing - RailMetrics.hintWidth, y: (rowHeight - hintHeight) / 2, width: RailMetrics.hintWidth,
+                height: hintHeight)
+            accessoryEnd -= RailMetrics.hintWidth
+        }
         let accessoryWidth = accessory.fittingWidth
         accessory.frame = NSRect(
-            x: trailing - accessoryWidth, y: (rowHeight - 16) / 2, width: accessoryWidth, height: 16)
-        let textEnd = accessoryWidth > 0 ? accessory.frame.minX - 7 : trailing
+            x: accessoryEnd - accessoryWidth, y: (rowHeight - 16) / 2, width: accessoryWidth, height: 16)
+        let textEnd = accessoryWidth > 0 ? accessory.frame.minX - 7 : accessoryEnd
+        nameMaxX = textEnd
         let nameSize = name.intrinsicContentSize
         let nameHeight = ceil(nameSize.height)
         let nameY = (rowHeight - nameHeight) / 2

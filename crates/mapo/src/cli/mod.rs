@@ -2,7 +2,9 @@
 
 mod attach;
 mod debug;
+mod explorer;
 mod instance;
+mod pane;
 mod state;
 mod ui;
 
@@ -44,6 +46,9 @@ pub enum Command {
     /// List, create, close, rename or focus tabs.
     #[command(subcommand)]
     Tab(state::TabCommand),
+    /// Split, focus, close or equalize panes.
+    #[command(subcommand)]
+    Pane(pane::PaneCommand),
     /// Show tab states.
     Status { name: Option<String> },
     /// Print events; with --follow, stream them.
@@ -55,6 +60,9 @@ pub enum Command {
         #[arg(long = "type")]
         types: Vec<String>,
     },
+    /// Refresh or collapse the app's Files inspector.
+    #[command(subcommand)]
+    Explorer(explorer::ExplorerCommand),
     /// Drive the app like a person: tree, snapshot, click, type, keys, waits, metrics.
     #[command(subcommand)]
     Ui(ui::UiCommand),
@@ -85,6 +93,7 @@ impl Cli {
         match &self.command {
             Command::Workspace(cmd) => state::workspace(self, cmd),
             Command::Tab(cmd) => state::tab(self, cmd),
+            Command::Pane(cmd) => pane::run(self, cmd),
             Command::Status { name } => state::status(self, name.as_deref()),
             Command::Events {
                 follow,
@@ -92,6 +101,7 @@ impl Cli {
                 types,
             } => state::events(self, *follow, *after, types),
             Command::Ui(cmd) => ui::run(self, cmd),
+            Command::Explorer(cmd) => explorer::run(self, cmd),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
             Command::Daemon { foreground } => {

@@ -412,6 +412,18 @@ public struct DaemonStopping: Codable, Hashable, Sendable {
     public var reason: String?
 }
 
+/// `fs.changed`: entries of the watched folder `root` changed; `paths` are entry names in it, empty when the
+/// folder itself changed (PROTOCOL §7).
+public struct FsChanged: Codable, Hashable, Sendable {
+    public var root: String
+    public var paths: [String]
+}
+
+/// `git.changed`: HEAD, the index or a ref of the repository at `root` changed.
+public struct GitChanged: Codable, Hashable, Sendable {
+    public var root: String
+}
+
 /// The typed `data` of the events the app applies. Everything else is `.other`.
 public enum EventPayload: Hashable, Sendable {
     case workspaceCreated(WorkspaceSummary)
@@ -429,6 +441,8 @@ public enum EventPayload: Hashable, Sendable {
     case appConnected
     case appDisconnected
     case daemonStopping(DaemonStopping)
+    case fsChanged(FsChanged)
+    case gitChanged(GitChanged)
     case other
 }
 
@@ -466,6 +480,8 @@ public struct Event: Decodable, Hashable, Sendable {
         case "app.connected": payload = .appConnected
         case "app.disconnected": payload = .appDisconnected
         case "daemon.stopping": payload = .daemonStopping(try data(DaemonStopping.self))
+        case "fs.changed": payload = .fsChanged(try data(FsChanged.self))
+        case "git.changed": payload = .gitChanged(try data(GitChanged.self))
         default: payload = .other
         }
     }

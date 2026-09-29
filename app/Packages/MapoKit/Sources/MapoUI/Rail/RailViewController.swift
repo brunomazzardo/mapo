@@ -1,5 +1,6 @@
 import AppKit
 import MapoClient
+import MapoProtocol
 
 /// What the rail asks of the app. Each action is a daemon command (AGENTS.md, non-negotiable 1).
 public struct RailActions {
@@ -17,15 +18,28 @@ public struct RailActions {
     }
 }
 
-/// The basic S2 rail (UX §3, PLAN T0.7 step 7): 26 pt workspace rows, 24 pt tab rows for the active
-/// workspace only, state dots and words. It watches the store and reloads only the rows that changed;
-/// a change in which rows exist reloads the list.
-public final class RailViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate {
-    private let store: AppStore
-    private let actions: RailActions
-    private let outline = RailOutlineView()
+/// The S2 rail (UX §3, PLAN T1.1): 26 pt workspace rows, 24 pt tab rows for the active workspace only,
+/// state dots and words, the inline branch, hold-⌘ hints, context menus, inline rename and drag reorder.
+/// It watches the store and repaints only the rows that changed; rows that appear or go are inserted and
+/// removed in place, so background updates never scroll or move focus (UX §3.7).
+public final class RailViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate,
+    NSMenuDelegate
+{
+    let store: AppStore
+    let actions: RailActions
+    let outline = RailOutlineView()
     private let scroll = NSScrollView()
-    private var items: [RailItem] = []
+    var items: [RailItem] = []
+    /// The open rename field, if any.
+    var renameField: RailRenameField?
+    /// A row to scroll into view once it exists, after a reorder (UX §3.7 rule 5).
+    var revealKey: String?
+    private var hintMonitor: Any?
+    private var hintTimer: Timer?
+    private var resignObserver: NSObjectProtocol?
+
+    /// The daemon connection behind the store, for the rail's own commands.
+    var client: MapoClient? { MapoClient.owner(of: store) }
 
     public init(store: AppStore, actions: RailActions) {
         self.store = store
@@ -57,8 +71,15 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
         outline.delegate = self
         outline.target = self
         outline.action = #selector(rowClicked)
+        outline.doubleAction = #selector(rowDoubleClicked)
         outline.setAccessibilityIdentifier(AXID.rail)
         outline.setAccessibilityLabel("Workspaces")
+        let menu = NSMenu()
+        menu.delegate = self
+        outline.menu = menu
+        outline.registerForDraggedTypes([.railRow])
+        outline.setDraggingSourceOperationMask(.move, forLocal: true)
+        outline.setDraggingSourceOperationMask([], forLocal: false)
 
         scroll.documentView = outline
         scroll.drawsBackground = false
@@ -86,6 +107,16 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
         observeContinuously(self) { $0.render() }
     }
 
+    public override func viewWillAppear() {
+        super.viewWillAppear()
+        installHintMonitor()
+    }
+
+    public override func viewDidDisappear() {
+        super.viewDidDisappear()
+        removeHintMonitor()
+    }
+
     public override func viewDidLayout() {
         super.viewDidLayout()
         outline.sizeLastColumnToFit()
@@ -95,16 +126,9 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
 
     private func render() {
         let rows = RailModel.rows(store)
-        if rows.map(\.key) != items.map(\.row.key) {
-            let existing = Dictionary(items.map { ($0.row.key, $0) }, uniquingKeysWith: { first, _ in first })
-            items = rows.map { row in
-                let item = existing[row.key] ?? RailItem(row: row)
-                item.row = row
-                return item
-            }
-            outline.reloadData()
-            outline.sizeLastColumnToFit()
-            return
+        let newKeys = rows.map(\.key)
+        if items.map(\.row.key) != newKeys {
+            applyStructure(rows)
         }
         for (index, row) in rows.enumerated() where items[index].row != row {
             let heightChanged = items[index].row.height != row.height
@@ -117,15 +141,74 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
             }
             if heightChanged { outline.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index)) }
         }
+        if let renameField, !newKeys.contains(renameField.rowKey) { endRename() }
+        if let key = revealKey, let index = newKeys.firstIndex(of: key) {
+            revealKey = nil
+            outline.scrollRowToVisible(index)
+        }
     }
+
+    /// Removes and inserts only the rows that went or came, keeping the scroll offset (UX §3.7 rules 2 and
+    /// 4). A reorder arrives as a removal and an insertion of the same key. Rows that stay keep their stale
+    /// contents here; `render` repaints them next.
+    private func applyStructure(_ rows: [RailRow]) {
+        let existing = Dictionary(items.map { ($0.row.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let difference = rows.map(\.key).difference(from: items.map(\.row.key))
+        let clip = scroll.contentView
+        let origin = clip.bounds.origin
+        outline.beginUpdates()
+        for change in difference.removals.reversed() {
+            guard case .remove(let offset, _, _) = change else { continue }
+            items.remove(at: offset)
+            outline.removeItems(at: IndexSet(integer: offset), inParent: nil, withAnimation: [])
+        }
+        for change in difference.insertions {
+            guard case .insert(let offset, let key, _) = change else { continue }
+            // A moved row keeps its item, so the table keeps its identity.
+            let item = existing[key] ?? RailItem(row: rows[offset])
+            items.insert(item, at: offset)
+            outline.insertItems(at: IndexSet(integer: offset), inParent: nil, withAnimation: [])
+        }
+        outline.endUpdates()
+        // Deleting rows keeps the offset unless the list got too short for it (UX §3.7 rule 4).
+        let maxY = max(-clip.contentInsets.top, outline.frame.height - clip.bounds.height + clip.contentInsets.bottom)
+        let target = NSPoint(x: origin.x, y: min(origin.y, maxY))
+        if clip.bounds.origin != target {
+            clip.scroll(to: target)
+            scroll.reflectScrolledClipView(clip)
+        }
+    }
+
+    // MARK: Clicks
 
     @objc private func rowClicked() {
         let index = outline.clickedRow
         guard items.indices.contains(index) else { return }
-        activate(items[index].row)
+        hideHints()
+        let row = items[index].row
+        if NSApp.currentEvent?.modifierFlags.contains(.option) == true, row.isTab, let id = row.modelId,
+            store.tabs[id]?.visible == false
+        {
+            // ⌥-click shows the tab to the right (UX §3.4).
+            run("Show to the Right") { try await $0.showTab(id: id, direction: "right") }
+            return
+        }
+        activate(row)
     }
 
-    private func activate(_ row: RailRow) {
+    @objc private func rowDoubleClicked() {
+        let index = outline.clickedRow
+        guard items.indices.contains(index), items[index].row.isInteractive else { return }
+        let key = items[index].row.key
+        // The first click's `tab.focus` moves focus into the terminal once the daemon answers; open the
+        // field after that, so it keeps focus.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            self?.beginRename(key: key)
+        }
+    }
+
+    func activate(_ row: RailRow) {
         guard let id = row.modelId else { return }
         switch row.kind {
         case .workspace(_, let active):
@@ -136,6 +219,146 @@ public final class RailViewController: NSViewController, NSOutlineViewDataSource
         default:
             break
         }
+    }
+
+    /// Runs a daemon command. A failure is logged and beeps.
+    func run(_ name: String, _ body: @escaping (MapoClient) async throws -> Void) {
+        guard let client else {
+            NSSound.beep()
+            return
+        }
+        Task {
+            do {
+                try await body(client)
+            } catch {
+                MapoLog.shared.warn("\(name) failed: \(error)")
+                NSSound.beep()
+            }
+        }
+    }
+
+    // MARK: Rename (UX §3.4)
+
+    /// Turns the row's name into the `rail.rename` field.
+    func beginRename(key: String) {
+        guard let index = items.firstIndex(where: { $0.row.key == key }), let id = items[index].row.modelId else {
+            return
+        }
+        let row = items[index].row
+        let current: String
+        switch row.kind {
+        case .workspace: current = store.workspace(id: id)?.name ?? row.text
+        case .tab: current = store.tabs[id]?.name ?? row.text
+        default: return
+        }
+        endRename()
+        outline.scrollRowToVisible(index)
+        guard let cell = outline.view(atColumn: 0, row: index, makeIfNecessary: true) as? RailCellView else { return }
+        let field = RailRenameField(rowKey: key, text: current, font: cell.nameFont)
+        let frame = cell.nameEditingFrame
+        field.frame = NSRect(x: frame.minX - 3, y: frame.minY - 2, width: frame.width + 6, height: frame.height + 4)
+        field.validate = { [weak self] name in self?.renameProblem(name, rowKey: key) }
+        field.onCancel = { [weak self] in self?.endRename() }
+        field.onCommit = { [weak self, weak field] name in
+            guard let self, let client else { return }
+            Task {
+                do {
+                    if row.isWorkspace {
+                        try await client.renameWorkspace(id: id, name: name)
+                    } else {
+                        try await client.renameTab(id: id, name: name)
+                    }
+                    if let field, self.renameField === field { self.endRename() }
+                } catch {
+                    // The daemon still rejected it: keep the field open with its message.
+                    field?.reject((error as? RPCError)?.message ?? "\(error)")
+                }
+            }
+        }
+        cell.addSubview(field)
+        renameField = field
+        field.begin()
+    }
+
+    /// Closes the field, if open, and gives focus back to the rail when the field had it.
+    func endRename() {
+        guard let field = renameField else { return }
+        renameField = nil
+        let hadFocus = field.currentEditor() != nil
+        field.removeFromSuperview()
+        if hadFocus { view.window?.makeFirstResponder(outline) }
+    }
+
+    /// Validation while typing (PA-28): an empty name, or a name already used among the row's siblings.
+    private func renameProblem(_ name: String, rowKey: String) -> String? {
+        guard let row = items.first(where: { $0.row.key == rowKey })?.row, let id = row.modelId else { return nil }
+        if name.isEmpty { return "A name can't be empty." }
+        if row.isWorkspace {
+            if store.workspaces.contains(where: { $0.id != id && $0.name == name }) {
+                return "A workspace named \"\(name)\" already exists."
+            }
+        } else if let workspaceId = row.workspaceId,
+            store.tabs(inWorkspace: workspaceId).contains(where: { $0.id != id && $0.name == name })
+        {
+            return "This workspace already has a tab named \"\(name)\"."
+        }
+        return nil
+    }
+
+    // MARK: Hold-⌘ hints (UX §3.3)
+
+    private func installHintMonitor() {
+        guard hintMonitor == nil else { return }
+        hintMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+            .flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        ]) { [weak self] event in
+            self?.handleHintEvent(event)
+            return event
+        }
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let window = notification.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard let self, window === self.view.window else { return }
+                self.hideHints()
+            }
+        }
+    }
+
+    private func removeHintMonitor() {
+        if let hintMonitor { NSEvent.removeMonitor(hintMonitor) }
+        hintMonitor = nil
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
+        hideHints()
+    }
+
+    /// ⌘ alone, held 400 ms in this window, shows the hints; anything else hides them. The monitor never
+    /// consumes the event.
+    func handleHintEvent(_ event: NSEvent) {
+        guard event.type == .flagsChanged, event.window === view.window else {
+            hideHints()
+            return
+        }
+        let held = event.modifierFlags.intersection([.command, .shift, .option, .control, .function])
+        guard held == .command else {
+            hideHints()
+            return
+        }
+        guard hintTimer == nil, !RailHints.shared.visible else { return }
+        hintTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.hintTimer = nil
+                RailHints.shared.visible = true
+            }
+        }
+    }
+
+    func hideHints() {
+        hintTimer?.invalidate()
+        hintTimer = nil
+        if RailHints.shared.visible { RailHints.shared.visible = false }
     }
 
     // MARK: NSOutlineViewDataSource

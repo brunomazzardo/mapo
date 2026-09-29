@@ -1,6 +1,15 @@
 import Foundation
 import MapoClient
 import MapoProtocol
+import Observation
+
+/// Whether the hold-⌘ hints show (UX §3.3). The rail's `flagsChanged` monitor sets it; the rail rows and
+/// `model.rail` read it.
+@Observable
+final class RailHints {
+    static let shared = RailHints()
+    var visible = false
+}
 
 /// What a rail row shows at its trailing edge (UX §3.1, §3.8).
 enum RailAccessory: Equatable {
@@ -46,6 +55,8 @@ struct RailRow: Equatable {
         case noTabs
         case noWorkspaces
         case newWorkspaceButton
+        /// The 6 pt gap after the expanded workspace's last row. A row of its own, so tab rows stay 24 pt.
+        case gap
     }
 
     /// Stable across renders: `workspace:<id>`, `tab:<id>`, and so on.
@@ -53,6 +64,8 @@ struct RailRow: Equatable {
     var kind: Kind
     /// The workspace or tab id.
     var modelId: String?
+    /// The workspace a tab or "No tabs" row belongs to.
+    var workspaceId: String?
     var text: String
     var secondaryText: String?
     var state: TabState = .idle
@@ -62,22 +75,31 @@ struct RailRow: Equatable {
     var label: String?
     var help: String?
     var tooltip: String?
-    /// Adds the 6 pt gap after the expanded workspace's last row.
-    var endsGroup = false
-
-    /// The row's own height; the group gap comes after it.
+    /// "⌘1" to "⌘9" while ⌘ is held, on the active workspace's first nine tab rows (UX §3.3).
+    var hint: String?
     var contentHeight: Double {
         switch kind {
         case .workspace: 26
         case .newWorkspaceButton: 28
+        case .gap: 6
         default: 24
         }
     }
 
-    var height: Double { contentHeight + (endsGroup ? 6 : 0) }
+    var height: Double { contentHeight }
 
     var isSelected: Bool {
         if case .tab(_, let selected) = kind { return selected }
+        return false
+    }
+
+    var isWorkspace: Bool {
+        if case .workspace = kind { return true }
+        return false
+    }
+
+    var isTab: Bool {
+        if case .tab = kind { return true }
         return false
     }
 
@@ -94,6 +116,7 @@ enum RailModel {
     static func rows(_ store: AppStore) -> [RailRow] {
         var rows = [RailRow(key: "header", kind: .header, text: "Workspaces")]
         guard store.hasSnapshot else { return rows }
+        let hints = RailHints.shared.visible
         if store.workspaces.isEmpty {
             rows.append(RailRow(key: "no-workspaces", kind: .noWorkspaces, text: "No workspaces"))
             rows.append(RailRow(key: "new-workspace", kind: .newWorkspaceButton, text: "New Workspace"))
@@ -106,13 +129,16 @@ enum RailModel {
             let tabs = store.tabs(inWorkspace: workspace.id)
             let selectedId = store.focusedTabId(inWorkspace: workspace.id)
             if tabs.isEmpty {
-                rows.append(RailRow(key: "no-tabs:\(workspace.id)", kind: .noTabs, text: "No tabs", endsGroup: true))
+                rows.append(
+                    RailRow(
+                        key: "no-tabs:\(workspace.id)", kind: .noTabs, workspaceId: workspace.id, text: "No tabs"))
             }
             for (index, tab) in tabs.enumerated() {
                 var row = tabRow(tab, workspace: workspace, selected: tab.id == selectedId)
-                row.endsGroup = index == tabs.count - 1
+                if hints, index < 9 { row.hint = "⌘\(index + 1)" }
                 rows.append(row)
             }
+            rows.append(RailRow(key: "gap:\(workspace.id)", kind: .gap, text: ""))
         }
         return rows
     }
@@ -160,11 +186,15 @@ enum RailModel {
         case .failed where tab.launchError != nil:
             accessory = .word("Couldn't start", .failed)
             tint = .failed
-            phrase = "couldn't start" + (tab.launchError.map { ", \($0.message.lowercased())" } ?? "")
+            phrase = "couldn't start" + (tab.launchError.map { ", \(launchProblem($0))" } ?? "")
         case .failed:
             accessory = .word("Failed", .failed)
             tint = .failed
-            phrase = "failed" + (tab.lastExit.map { ", exit \($0.code)" } ?? "")
+            if let detail = tab.stateDetail, !detail.isEmpty {
+                phrase = "failed, \(detail)"
+            } else {
+                phrase = "failed" + (tab.lastExit.map { ", exit \($0.code)" } ?? "")
+            }
         case .running where !ports.isEmpty:
             accessory = .port(":\(ports[0])" + (ports.count > 1 ? " +\(ports.count - 1)" : ""))
             phrase = "serving on port \(ports[0])"
@@ -187,11 +217,17 @@ enum RailModel {
         var tooltip = abbreviateHome(tab.cwd)
         if let detail = tab.stateDetail, !detail.isEmpty { tooltip += " · \(detail)" }
         return RailRow(
-            key: "tab:\(tab.id)", kind: .tab(icon: icon, selected: selected), modelId: tab.id, text: display,
+            key: "tab:\(tab.id)", kind: .tab(icon: icon, selected: selected), modelId: tab.id,
+            workspaceId: workspace.id, text: display,
             state: tab.state, accessory: accessory, tint: tint,
             identifier: AXID.railTab(workspace: workspace.name, tab: tab.name),
             label: phrase.map { "\(display), \($0)" } ?? display, help: tab.isAgent ? "Agent tab" : "Shell tab",
             tooltip: tooltip)
+    }
+
+    /// "folder missing" for a missing folder (UX §3.8), else the daemon's message.
+    private static func launchProblem(_ error: TabLaunchError) -> String {
+        error.kind == "cwd_missing" ? "folder missing" : error.message.lowercased()
     }
 
     private static func stateWord(_ state: TabState, label: String) -> String {
@@ -228,11 +264,13 @@ public enum RailSnapshot {
                 return .object(members)
             case .tab(let icon, let selected):
                 guard let tab = store.tabs[id] else { return nil }
-                return .object([
+                var members: [String: JSONValue] = [
                     "kind": .string("tab"), "id": .string(id), "workspaceId": .string(tab.workspaceId),
                     "name": .string(tab.name), "display": .string(row.text), "icon": .string(icon.rawValue),
                     "state": .string(row.state.rawValue), "accessory": accessory, "selected": .bool(selected),
-                ])
+                ]
+                if let hint = row.hint { members["hint"] = .string(hint) }
+                return .object(members)
             default:
                 return nil
             }

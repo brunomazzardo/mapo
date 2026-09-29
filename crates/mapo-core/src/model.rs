@@ -11,6 +11,8 @@ pub struct Workspace {
     pub order: u32,
     pub agent_command: Option<String>,
     pub layout: Layout,
+    /// The branch of the shown tab's folder, re-read when that folder changes (T1.1).
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +31,8 @@ pub struct Tab {
     pub last_exit: Option<LastExit>,
     pub launch_error: Option<LaunchError>,
     pub program: Option<String>,
+    /// When the running command's 133;C arrived.
+    pub command_started: Option<std::time::Instant>,
 }
 
 impl Tab {
@@ -45,7 +49,7 @@ pub fn new_id() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-/// The M0 layout: one pane per workspace.
+/// A new workspace's layout: one pane.
 pub fn single_pane(workspace_id: &str, tab: Option<&str>) -> Layout {
     let pane = new_id();
     Layout {
@@ -68,24 +72,15 @@ pub fn content_for(tab: Option<&str>) -> PaneContent {
 
 /// The tab shown in the layout's focused pane, if any.
 pub fn shown_tab(layout: &Layout) -> Option<&str> {
-    match &layout.root {
-        Node::Pane {
-            content: PaneContent::Tab { tab },
-            ..
-        } => Some(tab.as_str()),
-        _ => None,
-    }
+    crate::layout::tab_in(layout, &layout.focused_pane_id)
 }
 
-/// Points the single pane at `tab` (or empty).
-pub fn show_in_pane(layout: &mut Layout, tab: Option<&str>) {
-    if let Node::Pane { content, .. } = &mut layout.root {
-        *content = content_for(tab);
-    }
+/// Whether `tab` is shown in any pane of the layout.
+pub fn shows_tab(layout: &Layout, tab: &str) -> bool {
+    crate::layout::pane_of_tab(layout, tab).is_some()
 }
 
+/// The focused pane's id.
 pub fn pane_id(layout: &Layout) -> &str {
-    match &layout.root {
-        Node::Pane { id, .. } | Node::Split { id, .. } => id,
-    }
+    &layout.focused_pane_id
 }

@@ -105,6 +105,10 @@ struct SendMark {
     text: String,
     /// Text offset of the 133;C that followed the send, once seen.
     command_start: Option<u64>,
+    /// Sent at a prompt, or a prompt came back after it: the text runs as a shell command, so
+    /// waits match only after its 133;C. Otherwise it went to a running program (a REPL, `read`)
+    /// and waits match after its echo.
+    as_command: bool,
 }
 
 struct State {
@@ -142,6 +146,8 @@ struct Inner {
     output: broadcast::Sender<Arc<[u8]>>,
     started: Instant,
     pid: Option<u32>,
+    /// The PTY read task. It holds the master's read half, so close aborts it to hang up.
+    reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// A running tab.
@@ -294,14 +300,18 @@ pub fn launch(spec: &LaunchSpec, ctx: &Arc<HostContext>) -> Option<TabHandle> {
         output,
         started: Instant::now(),
         pid: child.id(),
+        reader: Mutex::new(None),
     });
     sink(&spec.tab_id, TabFact::Spawned);
-    tokio::spawn(read_loop(
+    let reader = tokio::spawn(read_loop(
         inner.clone(),
         read,
         ctx.clone(),
         spec.command.clone(),
     ));
+    if let Ok(mut r) = inner.reader.lock() {
+        *r = Some(reader);
+    }
     tokio::spawn(wait_loop(inner.clone(), child, ctx.clone()));
     Some(TabHandle { inner })
 }
@@ -392,12 +402,12 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
                         st.prompt_seen = true;
                         st.at_prompt = true;
                         st.in_command = false;
-                        if st
-                            .last_send
-                            .as_ref()
-                            .is_some_and(|s| s.command_start.is_none())
+                        if let Some(s) = st.last_send.as_mut()
+                            && s.command_start.is_none()
                         {
-                            // A prompt came back without a command: an empty line or a builtin.
+                            // The program the text went to finished; any typeahead now runs as
+                            // a command at this prompt.
+                            s.as_command = true;
                         }
                         st.pending_exec = false;
                         if st.busy_send {
@@ -533,6 +543,7 @@ impl TabHandle {
                 text_offset: st.preparser.text().end(),
                 text: text.to_owned(),
                 command_start: None,
+                as_command: at_prompt,
             });
             if execute && at_prompt {
                 st.pending_exec = true;
@@ -557,9 +568,15 @@ impl TabHandle {
 
     /// `tab.wait --until idle`: the shell sits at a prompt.
     pub async fn wait_idle(&self, timeout: Duration) -> Result<(), RpcError> {
-        self.wait_for(timeout, "the prompt", |st| {
+        let started = self.inner.started;
+        self.wait_for(timeout, "the prompt", move |st| {
             if st.exit.is_some() {
                 return Some(Err(RpcError::unavailable("the tab's shell exited")));
+            }
+            if !st.integrated && started.elapsed() > NO_INTEGRATION_AFTER {
+                return Some(Err(RpcError::unavailable(
+                    "this tab's shell doesn't report prompts (Mapo integrates zsh in v1)",
+                )));
             }
             Self::is_idle(st).then_some(Ok(()))
         })
@@ -575,13 +592,14 @@ impl TabHandle {
             // With integration, typed-ahead text runs as a command at the next prompt: match only
             // after its 133;C, so neither the tty echo nor zle's redraw can satisfy the wait.
             let (offset, start) = match &st.last_send {
-                Some(s) if st.integrated => match s.command_start {
+                Some(s) if st.integrated && s.as_command => match s.command_start {
                     Some(c) => (c, Start::AtOffset),
                     None if st.exit.is_some() => {
                         return Some(Err(RpcError::unavailable("the tab's shell exited")));
                     }
                     None => return None,
                 },
+                // Into a running program (or no integration): skip the echo of the sent text.
                 Some(s) => (s.text_offset, Start::AfterEcho(s.text.clone())),
                 None => (began, Start::AtOffset),
             };
@@ -694,6 +712,8 @@ impl TabHandle {
         if cols == 0 || rows == 0 {
             return;
         }
+        // Absurd sizes would make the emulator allocate gigabytes and take down every tab.
+        let (cols, rows) = (cols.min(1000), rows.min(500));
         {
             let mut st = lock(&self.inner);
             st.size = Size { cols, rows };
@@ -712,6 +732,10 @@ impl TabHandle {
     /// survives 3 s gets SIGKILL.
     pub async fn close(&self) {
         let _ = self.inner.writer.lock().await.take();
+        // Both halves share one master; dropping the reader closes it, and the kernel sends SIGHUP.
+        if let Some(reader) = self.inner.reader.lock().ok().and_then(|mut r| r.take()) {
+            reader.abort();
+        }
         self.inner.changed.notify_waiters();
         let inner = self.inner.clone();
         tokio::spawn(async move {

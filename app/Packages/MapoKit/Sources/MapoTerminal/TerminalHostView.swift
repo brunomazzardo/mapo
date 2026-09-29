@@ -29,6 +29,22 @@ public final class TerminalHostView: NSView {
     public private(set) var title: String?
     public private(set) var connection: TerminalConnection = .connected
     /// False while the control connection to mapod is down; the scrim's button waits (UX §4.3).
+    /// True while the surface is freed because the tab stayed hidden (ARCHITECTURE §4.3); showing the host
+    /// again builds a new surface, which replays.
+    public private(set) var isSuspended = false
+    /// False while the tab's shell has exited (`stopped`): the pane shows its exit bar instead of the
+    /// "Disconnected" scrim (UX §4.3).
+    public var allowsScrim = true {
+        didSet {
+            guard allowsScrim != oldValue else { return }
+            if !allowsScrim {
+                hideScrim()
+            } else if connection != .connected {
+                scrim.alphaValue = 1
+                scrim.isHidden = false
+            }
+        }
+    }
     public var isDaemonReachable = true {
         didSet { scrim.setWaiting(!isDaemonReachable) }
     }
@@ -100,8 +116,25 @@ public final class TerminalHostView: NSView {
     }
 
     public func setVisible(_ visible: Bool) {
+        if visible && isSuspended { resume() }
+        guard visible != isVisible else { return }
         isVisible = visible
         surface.setVisible(visible)
+    }
+
+    /// Frees the surface, so its `mapo attach` exits. The host stays; `setVisible(true)` rebuilds it.
+    public func suspend() {
+        guard !isSuspended else { return }
+        isSuspended = true
+        teardown(surface)
+    }
+
+    private func resume() {
+        isSuspended = false
+        surface = makeSurface()
+        install(surface)
+        setConnection(.connected)
+        hideScrim()
     }
 
     /// Builds a new surface, which attaches and replays. Keeps focus if the old surface had it.
@@ -176,6 +209,7 @@ public final class TerminalHostView: NSView {
     }
 
     private func showScrim() {
+        guard allowsScrim else { return }
         let hadFocus = window?.firstResponder === surface.view
         scrim.alphaValue = 0
         scrim.isHidden = false

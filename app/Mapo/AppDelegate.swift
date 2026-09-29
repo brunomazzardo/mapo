@@ -71,7 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let automation = AutomationServer(store: client.store, metrics: metrics) { [weak windowController] in
             windowController?.window
         }
-        client.requestHandler = { request in await automation.handle(request) }
+        client.requestHandler = { [weak windowController] request in
+            if request.method.hasPrefix("explorer."), let windowController {
+                return await windowController.inspector.handleExplorer(request)
+            }
+            return await automation.handle(request)
+        }
         self.client = client
         self.registry = registry
         self.automation = automation
@@ -115,12 +120,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         windowController?.newShellTab()
     }
 
+    @objc func splitRight(_ sender: Any?) { windowController?.splitPane("right") }
+    @objc func splitDown(_ sender: Any?) { windowController?.splitPane("down") }
+    @objc func closePane(_ sender: Any?) { windowController?.closePane() }
+    @objc func closeTab(_ sender: Any?) { windowController?.closeFocusedTab() }
+    @objc func focusPaneLeft(_ sender: Any?) { windowController?.focusPane("left") }
+    @objc func focusPaneRight(_ sender: Any?) { windowController?.focusPane("right") }
+    @objc func focusPaneUp(_ sender: Any?) { windowController?.focusPane("up") }
+    @objc func focusPaneDown(_ sender: Any?) { windowController?.focusPane("down") }
+    @objc func equalizePanes(_ sender: Any?) { windowController?.equalizePanes() }
+    @objc func stopCommand(_ sender: Any?) { windowController?.stopCommand() }
+    @objc func previousWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: -1) }
+    @objc func nextWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: 1) }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let connected = windowController?.isConnected ?? false
         switch menuItem.action {
+        case #selector(splitRight(_:)), #selector(splitDown(_:)), #selector(closePane(_:)),
+            #selector(focusPaneLeft(_:)), #selector(focusPaneRight(_:)), #selector(focusPaneUp(_:)),
+            #selector(focusPaneDown(_:)), #selector(equalizePanes(_:)), #selector(previousWorkspace(_:)),
+            #selector(nextWorkspace(_:)):
+            return connected && (windowController?.hasActiveWorkspace ?? false)
+        case #selector(closeTab(_:)):
+            return connected && (windowController?.hasFocusedTab ?? false)
+        case #selector(stopCommand(_:)):
+            return connected && (windowController?.focusedTabIsRunning ?? false)
         case #selector(newWorkspace(_:)), #selector(newShellTab(_:)):
-            windowController?.isConnected ?? false
+            return connected
         default:
-            true
+            return true
         }
     }
 }

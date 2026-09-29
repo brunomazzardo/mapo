@@ -45,6 +45,23 @@ public final class MainSplitViewController: NSSplitViewController {
         for item in [railItem, panesItem, inspectorItem] { addSplitViewItem(item) }
         splitView.autosaveName = "split-\(instance)"
     }
+
+    // While the window is occluded, AppKit's animated collapse never completes, so ⌃⌘S and ⌥⌘0 would do
+    // nothing in a drive without pixels (ENGINEERING §4.6). Then the toggles flip the item directly.
+
+    public override func toggleSidebar(_ sender: Any?) {
+        guard isOccluded, let item = splitViewItems.first else { return super.toggleSidebar(sender) }
+        item.isCollapsed.toggle()
+    }
+
+    public override func toggleInspector(_ sender: Any?) {
+        guard isOccluded, let item = splitViewItems.last else { return super.toggleInspector(sender) }
+        item.isCollapsed.toggle()
+    }
+
+    private var isOccluded: Bool {
+        !(view.window?.occlusionState.contains(.visible) ?? true)
+    }
 }
 
 /// The window's split view. Its dividers are `splitter` elements in `ui.tree`, which AppKit vends without
@@ -55,7 +72,8 @@ final class MainSplitView: NSSplitView {
         let splitters =
             children
             .compactMap { $0 as? NSObject & NSAccessibilityProtocol }
-            .filter { $0.accessibilityRole() == .splitter }
+            // Only the split view's own dividers; pane gutters are splitter views further down the tree.
+            .filter { $0.accessibilityRole() == .splitter && !($0 is NSView) }
             .sorted { $0.accessibilityFrame().minX < $1.accessibilityFrame().minX }
         let names = [AXID.windowDividerRail, AXID.windowDividerInspector]
         for (splitter, name) in zip(splitters, names) {

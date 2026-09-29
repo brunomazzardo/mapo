@@ -5,6 +5,7 @@
 
 pub mod actor;
 pub mod events;
+pub mod layout;
 pub mod model;
 pub mod names;
 pub mod status;

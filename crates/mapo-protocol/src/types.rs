@@ -242,6 +242,34 @@ pub struct TabRename {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceMove {
+    pub workspace: String,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabMove {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub index: usize,
+}
+
+/// `ui.visibility`: what the app shows (app to daemon).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Visibility {
+    pub key_window: bool,
+    #[serde(default)]
+    pub visible_tab_ids: Vec<String>,
+    #[serde(default)]
+    pub focused_tab_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TabSend {
     #[serde(default)]
     pub tab: Option<String>,
@@ -302,4 +330,62 @@ pub struct TabRun {
     pub lines: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+}
+
+// ---- layout and panes (PROTOCOL §6.4) ----
+
+/// `layout.get`, `pane.close` and `pane.equalize`. `pane` defaults to the focused pane of the
+/// resolved workspace; `split` (equalize only) limits equalizing to one split.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaneRef {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub pane: Option<String>,
+    #[serde(default)]
+    pub split: Option<String>,
+}
+
+/// What `pane.split` puts in the new pane: `{tab}`, `{file}` or `"new-shell"` (the default).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum SplitContent {
+    Tab { tab: String },
+    File { file: String },
+    Word(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaneSplit {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub pane: Option<String>,
+    /// `right` or `down`.
+    pub direction: String,
+    #[serde(default)]
+    pub content: Option<SplitContent>,
+}
+
+/// `pane.focus`: a pane id, or a direction from the focused pane.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaneFocus {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub pane: Option<String>,
+    #[serde(default)]
+    pub direction: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PaneResize {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub split: String,
+    pub ratios: Vec<f64>,
 }

@@ -3,6 +3,7 @@
 
 mod attach;
 mod conn;
+mod fs;
 mod host;
 mod logging;
 
@@ -134,10 +135,20 @@ fn take_lock(paths: &Paths, name: &str) -> Result<Lock, RpcError> {
         .mode(0o600)
         .open(&paths.lock)
         .map_err(|e| RpcError::internal(format!("open {}: {e}", paths.lock.display())))?;
-    match rustix::fs::flock(
+    // A daemon that is stopping still holds the lock for a moment (restart race): retry 2 s.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut locked = rustix::fs::flock(
         file.as_fd(),
         rustix::fs::FlockOperation::NonBlockingLockExclusive,
-    ) {
+    );
+    while locked.is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+        locked = rustix::fs::flock(
+            file.as_fd(),
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        );
+    }
+    match locked {
         Ok(()) => Ok(Lock(file)),
         Err(_) => {
             let owner = mapo_instance::read_pid_file(&paths.pid_file)
@@ -197,7 +208,7 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
             instance: instance.name.clone(),
             resources: mapo_term::env::Resources::from_exe(&exe),
             shell: mapo_term::env::login_shell(None),
-            scrollback: 10_000,
+            scrollback: 2_000,
             sink: Arc::new(move |id: &str, fact| sink_core.tab_fact(id, fact)),
         });
         let host = host::spawn(host_rx, ctx);

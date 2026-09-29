@@ -21,6 +21,7 @@ mapo-protocol = { path = "crates/mapo-protocol" }
 mapo-instance = { path = "crates/mapo-instance" }
 mapo-core = { path = "crates/mapo-core" }
 mapo-term = { path = "crates/mapo-term" }
+mapo-git = { path = "crates/mapo-git" }
 
 tokio = { version = "1.53", features = ["rt-multi-thread", "rt", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "process", "fs"] }
 serde = { version = "1", features = ["derive"] }
@@ -40,6 +41,9 @@ rustix = { version = "1.1.5", features = ["fs", "process", "termios"] }
 pty-process = { version = "=0.5.3", features = ["async"] }
 alacritty_terminal = "=0.26.0"
 typeshare = "1.0.2"
+ignore = "0.4.33"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
 
 [profile.release]
 lto = "thin"

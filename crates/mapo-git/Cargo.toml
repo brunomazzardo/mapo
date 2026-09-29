@@ -1,0 +1,18 @@
+[package]
+name = "mapo-git"
+description = "Directory listings, the git status cache and file watching for the Files inspector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ignore.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

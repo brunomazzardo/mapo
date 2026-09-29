@@ -13,6 +13,7 @@ workspace = true
 mapo-protocol.workspace = true
 mapo-instance.workspace = true
 mapo-core.workspace = true
+mapo-git.workspace = true
 mapo-term.workspace = true
 anyhow.workspace = true
 clap.workspace = true

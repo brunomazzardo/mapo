@@ -19,11 +19,49 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 | T0.5 | PLAN T0.5 step 2 and acceptance | `TERM=xterm-ghostty`, `infocmp xterm-ghostty` ok | `TERM=xterm-256color` | No Ghostty terminfo, since GhosttyKit can't be acquired tonight; the code switches automatically once `resources/terminfo/78/xterm-ghostty` exists |
 | T0.5 | PLAN T0.5 step 8 | Waiters live in the core | `tab.wait` and `tab.run` waiters live in each tab task, next to the text stream they match | Simpler, with no text copied into the core; the behavior is the same |
 | T0.5 | PLAN T0.5 step 8, contract 6 | Match after C only when the send was at a prompt | With shell integration, always match after the next 133;C following the send | A send that races the returning prompt was matched by the tty echo plus zle's redraw of the typed-ahead line |
+| T1.2 | UX §4.2 | (M0 showed the next tab) | Closing the tab shown in the only pane leaves an empty pane; with several panes the tab's pane closes | UX §4.2 says so; M0 predated panes |
+| T1.2 | ARCHITECTURE §4.3 | Surfaces hide with the view | SwiftTerm `setVisible` is a no-op | Toggling `isHidden` redrew every terminal on the CPU and took the switch p95 to 95 ms |
+| T1.4 | UX §4.3 | "Disconnected" scrim on child exit | A stopped tab shows the exit bar ("The shell exited with code N." with Restart and Close Tab) instead of the scrim | Attach now exits on EXIT; the scrim is for a lost daemon |
+| T1.5 | UX §2.1 | Inspector segments in the toolbar | Segments sit at the top of the inspector content | The fallback UX §2.1 allows |
+| T1.5 | ARCHITECTURE §3.7 | Watching | Non-recursive watches per shown folder, plus a 5 s status cache expiry | Recursive watches on large trees are costly; collapsed subfolders refresh through the expiry |
+| T1.1 | UX §3.5 | Rail menus | New Tab in Folder… and Set Agent Command… deferred to T1.8 and M2 | They need the folder sheet and `workspace.configure` |
+| M1 | ENGINEERING §4.3 | Panel toggles animate | `toggleSidebar` and `toggleInspector` flip `isCollapsed` directly when the window is occluded | AppKit never finishes the collapse animation for an occluded window, so drives couldn't toggle panels |
 | T0.8 | PLAN T0.8 fallback | SwiftTerm "from 1.20.0" | SwiftTerm exactly 1.11.2 | 1.12+ needs the Metal Toolchain, which isn't installed (see Needs the user) |
 | T0.8 | D-13, PLAN T0.8a | GhosttyKit prebuilt | SwiftTerm fallback, `engine = "swiftterm"` default | GhosttyKit acquisition refused by the permission classifier (see Needs the user) |
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **M0 critical review (Fable) and fixes.** The review found five clear bugs, all fixed and re-driven (T0.3 to T0.6 drives pass):
+  1. A stopped tab's `mapo attach` looped forever. EXIT now ends attach with code 3; attaching to a stopped tab fails at once with `conflict`; the host drops a stopped shell's handle.
+  2. Closing a tab didn't hang up its shell, because the PTY read half kept the master open. Close now aborts the read task, and the shell is gone within 0.3 s instead of the 3 s SIGKILL.
+  3. `tab wait --until TEXT` after input sent into a running program (a REPL, `cat`) never matched. Such sends now match after their echo; sends at a prompt, or typeahead that meets a prompt, still match after 133;C.
+  4. The attach outbound queue was unbounded. A client more than 1 MiB behind stops getting output and is resynced with a fresh replay once it drains (PROTOCOL §8).
+  5. Tab credentials weren't guarded (R-CTL-4). Closing another tab or deleting a workspace from a tab needs `force`, and `ui.*`, `explorer.*` and attach need the app credential.
+
+  Also done:
+  - emulator scrollback cut to 2,000 lines (the R-NF-1 budget)
+  - RESIZE clamped to 1000×500
+  - `LaunchSpec` Debug redacts the token
+  - idle waits on shells without integration fail fast with `unavailable`
+  - request tasks abort when their client disconnects
+  - the instance lock retries for 2 s (restart race)
+  - SQLite `busy_timeout`
+
+  Still open (recorded, not fixed): a mid-stream `cursor_expired` goes out with a null id, which the app drops (it recovers on its next reconnect); SQLite write failures are logged but not surfaced as events.
+- **T1.1 to T1.5 done** (rail by a subagent; layout and switching by a subagent; Files by a subagent; the T1.1 and T1.4 daemon parts and the integration by the coordinator). Every drive passes on one integration build:
+  - `task-t1-1` 28/28 `evidence/task-t1-1/20260929-013935`: 24 and 26 pt rows, Couldn't start, branch in the workspace row, persisted reorder, inline rename, delete keeps the scroll position.
+  - `task-t1-2` 25/25 `evidence/task-t1-2/20260929-014152`: pane.split 70 to 78 ms; the layout survives relaunch and a daemon restart, ratios included.
+  - `task-t1-3` 11/11 `evidence/task-t1-3/20260929-013950`: warm switch p95 30 ms, p50 24 ms over 40 switches; hidden surfaces detach after 30 s and repaint when shown.
+  - `task-t1-4` 8/8 `evidence/task-t1-4/20260929-014038`: a long unviewed command becomes failed (stateDetail "exit 1") or done; a short one stays idle; failed clears on the next command; Stop gives exit 130; a stopped shell restarts in its folder.
+  - `task-t1-5` 16/16 `evidence/task-t1-5/20260929-014202`: rows with git letters, gitignore honored, following cd in 133 to 190 ms without taking focus, missing, empty and unreadable states.
+
+  M0 still passes (`m0-skeleton` 17/17). Reviews: accept, with every visual claim unverified (no pixels).
+
+  Known gaps, listed for the morning:
+  - Rail context menus can't be driven: `ui click --right` opens a real NSMenu whose tracking loop blocks `ui.*`. The items exist but are unexercised.
+  - Drag reorder and gutter dragging can't be driven: `mapo ui` has no drag verb. Move Up and Move Down, and `pane.resize`, are driven instead.
+  - Switching back to a workspace whose surfaces were freed takes about 230 ms, because 5 surfaces are rebuilt and reattached.
+  - The rail's `applyStructure` costs about 10 ms per switch in Debug; it goes on the T5.1 list.
 - **T0.10 done (isolation proof).** Setup was a fresh worktree `../mapo-native-iso` (`native-iso`): `just setup` took under 5 s, and its cold `just build` took 27 s while main rebuilt in 6 s. Both instances ran at once:
 
   | | dev-mapo-native | dev-mapo-native-iso |

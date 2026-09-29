@@ -7,6 +7,10 @@ public final class SurfaceRegistry {
     private let launch: (_ tabId: String) -> TerminalLaunch
     private let identifiers: TerminalIdentifiers
     private var hosts: [String: TerminalHostView] = [:]
+    private var detachTasks: [String: Task<Void, Never>] = [:]
+
+    /// How long a hidden surface lives before it is freed (ARCHITECTURE §4.3).
+    public var detachDelay: Duration = .seconds(30)
 
     /// - Parameters:
     ///   - identifiers: the terminal identifiers for a tab name (`AXID` in MapoUI).
@@ -52,6 +56,7 @@ public final class SurfaceRegistry {
 
     /// Stops the tab's surface and forgets it. Call when the tab closes.
     public func close(_ tabId: String) {
+        detachTasks.removeValue(forKey: tabId)?.cancel()
         guard let host = hosts.removeValue(forKey: tabId) else { return }
         host.close()
         host.removeFromSuperview()
@@ -60,6 +65,32 @@ public final class SurfaceRegistry {
     /// Stops every surface, for app termination.
     public func closeAll() {
         for tabId in Array(hosts.keys) { close(tabId) }
+    }
+
+    /// Tells every host whether it is on screen: `visible` holds the tabs in the shown workspace's panes.
+    /// A host hidden for `detachDelay` frees its surface; showing it again rebuilds the surface, and the
+    /// daemon's replay repaints it.
+    public func updateVisibility(visible: Set<String>) {
+        for (tabId, host) in hosts {
+            if visible.contains(tabId) {
+                detachTasks.removeValue(forKey: tabId)?.cancel()
+                host.setVisible(true)
+            } else if detachTasks[tabId] == nil, !host.isSuspended {
+                host.setVisible(false)
+                let delay = detachDelay
+                detachTasks[tabId] = Task { [weak self, weak host] in
+                    try? await Task.sleep(for: delay)
+                    guard !Task.isCancelled else { return }
+                    self?.detachTasks[tabId] = nil
+                    host?.suspend()
+                }
+            }
+        }
+    }
+
+    /// Hosts whose surface is live (not suspended), for diagnostics.
+    public var liveTabIds: [String] {
+        hosts.filter { !$0.value.isSuspended }.map(\.key)
     }
 
     /// Updates `isDaemonReachable` on every body (UX §4.3 "Waiting for mapod…").

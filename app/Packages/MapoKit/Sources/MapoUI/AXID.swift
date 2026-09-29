@@ -8,6 +8,8 @@ public enum AXID {
     public static let railToggle = "rail.toggle"
     public static let railNewWorkspace = "rail.newWorkspace"
     public static let railEmptyNewWorkspace = "rail.empty.newWorkspace"
+    /// The inline rename field on a rail row (UX §3.4).
+    public static let railRename = "rail.rename"
     public static let toolbarTitle = "toolbar.title"
     public static let toolbarInspector = "toolbar.inspector"
     public static let windowDividerRail = "window.divider:rail"
@@ -15,6 +17,10 @@ public enum AXID {
     public static let inspector = "inspector"
     public static let appBanner = "app.banner"
     public static let appBannerAction = "app.banner.action"
+    /// A sheet on the main window and its buttons (UX §3.5), built by `ConfirmSheet`.
+    public static let dialog = "dialog"
+    public static let dialogConfirm = "dialog.confirm"
+    public static let dialogCancel = "dialog.cancel"
 
     /// `rail.workspace:<workspaceName>`.
     public static func railWorkspace(_ workspaceName: String) -> String {
@@ -55,6 +61,41 @@ public enum AXID {
     /// so no pane id).
     public static func paneEmptyNewShell(_ paneId: String?) -> String {
         paneId.map { "pane.empty.newShell:\($0)" } ?? "pane.empty.newShell"
+    }
+
+    /// `pane.empty.newAgent:<paneId>`.
+    public static func paneEmptyNewAgent(_ paneId: String?) -> String {
+        paneId.map { "pane.empty.newAgent:\($0)" } ?? "pane.empty.newAgent"
+    }
+
+    /// `pane.header:<tabName>`, or `pane.header:<absPath>` for file and diff panes.
+    public static func paneHeader(_ name: String) -> String {
+        "pane.header:\(name)"
+    }
+
+    /// `pane.close:<paneId>`.
+    public static func paneClose(_ paneId: String) -> String {
+        "pane.close:\(paneId)"
+    }
+
+    /// `pane.stop:<tabName>`.
+    public static func paneStop(_ tabName: String) -> String {
+        "pane.stop:\(tabName)"
+    }
+
+    /// `pane.restart:<tabName>`, on the exit bar of a stopped shell (UX §4.3).
+    public static func paneRestart(_ tabName: String) -> String {
+        "pane.restart:\(tabName)"
+    }
+
+    /// `pane.closeTab:<tabName>`, on the exit bar of a stopped shell (UX §4.3).
+    public static func paneCloseTab(_ tabName: String) -> String {
+        "pane.closeTab:\(tabName)"
+    }
+
+    /// `pane.divider:<splitId>/<index>`: the gutter after child `index` of a split (UX §2.4).
+    public static func paneDivider(splitId: String, index: Int) -> String {
+        "pane.divider:\(splitId)/\(index)"
     }
 
     /// Rule 2: `%` becomes `%25` first, then `/` becomes `%2F`, so the separator stays unambiguous.

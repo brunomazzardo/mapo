@@ -40,6 +40,12 @@ public final class SwiftTermSurfaceView: LocalProcessTerminalView, TerminalSurfa
         fatalError("SwiftTermSurfaceView is built in code")
     }
 
+    /// The surface is one text area (`pane.terminal:<tabName>`). SwiftTerm's legacy scroller would add four
+    /// unnamed buttons once there is scrollback, so the element has no children.
+    public override func accessibilityChildren() -> [Any]? {
+        []
+    }
+
     // MARK: TerminalSurface
 
     public func focus() {
@@ -51,8 +57,8 @@ public final class SwiftTermSurfaceView: LocalProcessTerminalView, TerminalSurfa
     }
 
     public func setVisible(_ visible: Bool) {
-        // SwiftTerm draws on demand, so a hidden view costs nothing; nothing to pause.
-        isHidden = !visible
+        // SwiftTerm draws on demand, so a view that isn't on screen costs nothing and needs no pausing. The
+        // view keeps its backing store while its workspace is hidden, so showing it again redraws nothing.
     }
 
     public func close() {

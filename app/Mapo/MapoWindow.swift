@@ -21,4 +21,13 @@ final class MapoWindow: NSWindow {
         isReleasedWhenClosed = false
         setAccessibilityIdentifier(AXID.windowMain)
     }
+
+    /// Sees every left mouse-down before AppKit routes it, including the first click into a window that
+    /// isn't key, which AppKit swallows. The panes area uses it so a click anywhere in a pane focuses it.
+    var onLeftMouseDown: ((NSEvent) -> Void)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown { onLeftMouseDown?(event) }
+        super.sendEvent(event)
+    }
 }

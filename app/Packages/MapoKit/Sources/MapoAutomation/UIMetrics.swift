@@ -18,6 +18,7 @@ public final class UIMetrics {
         case workspaceSwitch = "workspace.switch"
         case tabFocus = "tab.focus"
         case tabCreate = "tab.create"
+        case paneSplit = "pane.split"
     }
 
     private struct Span {
@@ -78,6 +79,19 @@ public final class UIMetrics {
     public func beginWorkspaceSwitch(to workspaceId: String) {
         let store = store
         begin(.workspaceSwitch) { store.activeWorkspaceId == workspaceId }
+    }
+
+    /// `pane.split` (⌘D, ⇧⌘D): until the active workspace focuses a new pane whose tab the store knows.
+    public func beginPaneSplit() {
+        let store = store
+        let workspaceId = store.activeWorkspaceId
+        let before = workspaceId.flatMap { store.layouts[$0]?.focusedPaneId }
+        begin(.paneSplit) {
+            guard let workspaceId, let pane = store.layouts[workspaceId]?.focusedPane, pane.id != before,
+                let tabId = pane.content.tabId
+            else { return false }
+            return store.tabs[tabId] != nil
+        }
     }
 
     public func beginTabFocus(_ tabId: String) {

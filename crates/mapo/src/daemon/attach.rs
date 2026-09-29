@@ -76,6 +76,11 @@ async fn serve(
     live: &mut tokio::sync::broadcast::Receiver<std::sync::Arc<[u8]>>,
     strategy: ReplayStrategy,
 ) {
+    // A client more than 1 MiB behind stops getting output and is resynced with a fresh replay
+    // once its queue drains (PROTOCOL §8), so a slow surface can't grow daemon memory.
+    const BEHIND: usize = 1 << 20;
+    const CAUGHT_UP: usize = 64 << 10;
+    let mut behind = false;
     let mut decoder = FrameDecoder::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut stop = shared.shutdown.subscribe();
@@ -84,6 +89,16 @@ async fn serve(
     loop {
         tokio::select! {
             out = live.recv() => match out {
+                Ok(_) if behind && tx.queued() > CAUGHT_UP => {}
+                Ok(_) if behind => {
+                    behind = false;
+                    let (replay, rx) = handle.resync(strategy);
+                    *live = rx;
+                    if !send_replay(tx, &replay) {
+                        return;
+                    }
+                }
+                Ok(_) if tx.queued() > BEHIND => behind = true,
                 Ok(bytes) => {
                     let mut frames = Vec::with_capacity(bytes.len() + 5);
                     encode_data(false, &bytes, &mut frames);
@@ -125,6 +140,17 @@ async fn serve(
                             tracing::warn!(error = %e, "bad attach frame");
                             return;
                         }
+                    }
+                }
+            }
+            // Output may stop while the client is behind: check the queue on a short tick too.
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)), if behind => {
+                if tx.queued() <= CAUGHT_UP {
+                    behind = false;
+                    let (replay, rx) = handle.resync(strategy);
+                    *live = rx;
+                    if !send_replay(tx, &replay) {
+                        return;
                     }
                 }
             }

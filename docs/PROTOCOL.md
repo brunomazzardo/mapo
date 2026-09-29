@@ -141,20 +141,20 @@ The milestone is where each method first ships ([PLAN.md](PLAN.md)). "→" means
 
 | Method | Params → result | M |
 |---|---|---|
-| `layout.get` | `{workspace?}` → `Layout` | M1 |
+| `layout.get` | `{workspace?}` → `Layout`. Every `pane.*` method also accepts an optional `workspace`. | M1 |
 | `pane.split` | `{pane?, direction:"right"\|"down", content?:{tab}\|{file}\|"new-shell"}` → `Layout` | M1 |
 | `pane.close` | `{pane?}` → `Layout`. The tab keeps running in the background. | M1 |
 | `pane.focus` | `{pane?}` or `{direction:"left"\|"right"\|"up"\|"down"}` → `Layout` | M1 |
 | `pane.resize` | `{split, ratios:[number]}` → `Layout` | M1 |
-| `pane.equalize` | `{workspace?}` → `Layout` | M1 |
+| `pane.equalize` | `{workspace?, split?}` → `Layout`. `split` equalizes one split (a double-click on its gutter). `pane.focus` rejects `pane` and `direction` together; `pane.split {tab}` moves a tab already shown elsewhere by closing that pane first. | M1 |
 
 ### 6.5 Files, explorer, git
 
 | Method | Params → result | M |
 |---|---|---|
 | `file.open` | `{path, workspace?, beside?:true}` → `{path, paneId}`. Existing regular files only; folders, missing paths, broken links and unreadable files are rejected before any UI change. | M1 |
-| `fs.list` | `{path}` → `{path, state:"ready"\|"empty"\|"missing"\|"unreadable", hiddenByExclude:number, entries:[{name, kind:"file"\|"dir"\|"symlink", git?:"M"\|"A"\|"D"\|"R"\|"?"\|"U", ignored?:bool}]}` | M1 |
-| `fs.watch` / `fs.unwatch` | `{path}` → `{}`. Connection-scoped; emits `fs.changed`. | M1 |
+| `fs.list` | `{path}` → `{path, state:"ready"\|"empty"\|"missing"\|"unreadable", hiddenByExclude:number, repo?:{root, branch?}, entries:[{name, kind:"file"\|"dir"\|"symlink", git?:"M"\|"A"\|"D"\|"R"\|"?"\|"U", ignored?:bool}]}`. `kind` follows a symlink's target; `symlink` means a broken link. `hiddenByExclude` counts `[files] exclude` matches only. | M1 |
+| `fs.watch` / `fs.unwatch` | `{path}` → `{}`. Connection-scoped and non-recursive: one folder's entries plus the repository's `HEAD`, `index` and refs. Emits `fs.changed {root, paths}` (entry names; empty when the folder itself changed) and `git.changed {root}`. | M1 |
 | `explorer.refresh` / `explorer.collapse` | `{}` → `{path, state}` (routed to the app) | M1 |
 | `git.status` | `{path}` → `{root, branch, upstream?, ahead, behind, files:[{path, status, added, deleted}], totals:{files, added, deleted}, warn?:string}` | M4 |
 | `git.diff` | `{root, path}` → `{text}` | M4 |
@@ -275,7 +275,8 @@ frame := kind:u8 | length:u32 big-endian | payload[length]      (payload ≤ 655
 | `mapo tab send NAME TEXT… [--no-execute]`, `read NAME [--lines N]`, `wait NAME --until idle\|TEXT [--timeout-ms N]` | `tab.send`, `tab.read`, `tab.wait` |
 | `mapo tab run NAME COMMAND…`, `ask NAME PROMPT…`, `stop NAME`, `interrupt NAME`, `restart NAME` | `tab.run`, `tab.ask`, `tab.stop`, `tab.interrupt`, `tab.restart` |
 | `mapo tab focus\|close\|rename\|move NAME …` | `tab.*` |
-| `mapo pane split right\|down [--tab NAME\|--file PATH]`, `pane focus left\|right\|up\|down`, `pane close`, `pane equalize` | `pane.*` |
+| `mapo pane split right\|down [--tab NAME\|--file PATH] [--pane ID]`, `pane focus left\|right\|up\|down` (or `--pane ID`), `pane close [--pane ID]`, `pane equalize` (all honor `--workspace`) | `pane.*` |
+| `mapo tab stop NAME`, `mapo tab restart NAME`, `mapo tab move NAME --index N`, `mapo workspace move NAME --index N` | `tab.stop`, `tab.restart`, `tab.move`, `workspace.move` |
 | `mapo status [NAME]` | `tab.list`/`workspace.list` filtered |
 | `mapo file open PATH` | `file.open` |
 | `mapo explorer refresh\|collapse` | `explorer.*` |

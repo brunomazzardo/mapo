@@ -58,6 +58,7 @@ public final class MapoClient {
     private var backoff: Task<Void, Never>?
     private var lastSpawn: Date?
     private var forceSnapshot = false
+    private var eventListeners: [(Event) -> Void] = []
 
     private static let backoffSteps: [Double] = [0.25, 0.5, 1, 2, 3]
     private static let spawnInterval: TimeInterval = 10
@@ -66,6 +67,18 @@ public final class MapoClient {
         self.configuration = configuration
         self.store = AppStore(instance: configuration.instance.name)
         self.launcher = DaemonLauncher(helper: configuration.helper, instance: configuration.instance.name)
+        Self.owners[ObjectIdentifier(store)] = WeakClient(client: self)
+    }
+
+    private struct WeakClient {
+        weak var client: MapoClient?
+    }
+
+    private static var owners: [ObjectIdentifier: WeakClient] = [:]
+
+    /// The client that keeps `store` in sync, so views that are handed the store can run daemon commands.
+    public static func owner(of store: AppStore) -> MapoClient? {
+        owners[ObjectIdentifier(store)]?.client
     }
 
     public func start() {
@@ -79,6 +92,12 @@ public final class MapoClient {
         backoff?.cancel()
         connection?.cancel()
         connection = nil
+    }
+
+    /// Calls `listener` on the main actor with every event the store applied, in `seq` order. For events that
+    /// are notifications rather than state, such as `fs.changed` and `git.changed`.
+    public func addEventListener(_ listener: @escaping (Event) -> Void) {
+        eventListeners.append(listener)
     }
 
     /// Calls a daemon method on the current connection.
@@ -176,7 +195,9 @@ public final class MapoClient {
         for await notification in connection.notifications {
             switch notification {
             case .event(let event):
-                store.apply(event)
+                if store.apply(event) {
+                    for listener in eventListeners { listener(event) }
+                }
                 if case .daemonStopping(let stopping) = event.payload {
                     log.info("daemon stopping: \(stopping.reason ?? "no reason")")
                 }
@@ -320,5 +341,80 @@ extension MapoClient {
 
     public func focusTab(id: String) async throws {
         _ = try await call(Method.tabFocus, TabSelector(tab: id), as: TabSummary.self)
+    }
+}
+
+// MARK: - Commands the rail calls (UX §3.4, §3.5)
+
+extension MapoClient {
+    nonisolated private struct IndexParams: Encodable, Sendable {
+        var workspace: String?
+        var tab: String?
+        var index: Int
+    }
+
+    nonisolated private struct NameParams: Encodable, Sendable {
+        var workspace: String?
+        var tab: String?
+        var name: String
+    }
+
+    nonisolated private struct ForceParams: Encodable, Sendable {
+        var workspace: String?
+        var tab: String?
+        var force: Bool
+    }
+
+    nonisolated private struct ShowTabParams: Encodable, Sendable {
+        struct Content: Encodable, Sendable { var tab: String }
+        var direction: String
+        var content: Content
+    }
+
+    /// `workspace.move`: to a zero-based position in the rail.
+    public func moveWorkspace(id: String, to index: Int) async throws {
+        _ = try await call("workspace.move", IndexParams(workspace: id, index: index), as: WorkspaceSummary.self)
+    }
+
+    /// `tab.move`: to a zero-based position in its workspace.
+    public func moveTab(id: String, to index: Int) async throws {
+        _ = try await call("tab.move", IndexParams(tab: id, index: index), as: TabSummary.self)
+    }
+
+    public func renameWorkspace(id: String, name: String) async throws {
+        _ = try await call("workspace.rename", NameParams(workspace: id, name: name), as: WorkspaceSummary.self)
+    }
+
+    /// `tab.rename`, which also makes the tab labeled (R-TAB-3).
+    public func renameTab(id: String, name: String) async throws {
+        _ = try await call("tab.rename", NameParams(tab: id, name: name), as: TabSummary.self)
+    }
+
+    /// `tab.close`. Without `force`, a tab running a foreground program is `forbidden`.
+    public func closeTab(id: String, force: Bool = false) async throws {
+        _ = try await call("tab.close", ForceParams(tab: id, force: force), as: JSONValue.self)
+    }
+
+    /// `workspace.delete`. Without `force`, a workspace with running foreground programs is `forbidden`.
+    public func deleteWorkspace(id: String, force: Bool = false) async throws {
+        _ = try await call("workspace.delete", ForceParams(workspace: id, force: force), as: JSONValue.self)
+    }
+
+    /// `tab.create` in a given workspace, appended at its end.
+    public func newTab(inWorkspace workspaceId: String, kind: String, cwd: String? = nil) async throws {
+        _ = try await call(
+            Method.tabCreate, TabCreateParams(workspace: workspaceId, kind: kind, cwd: cwd, focus: true),
+            as: TabSummary.self)
+    }
+
+    /// `tab.stop`, `tab.restart` or `tab.interrupt` on one tab.
+    public func tabCommand(_ method: String, id: String) async throws {
+        _ = try await call(method, TabSelector(tab: id), as: JSONValue.self)
+    }
+
+    /// `pane.split` showing an existing tab to the right of or below the focused pane.
+    public func showTab(id: String, direction: String) async throws {
+        _ = try await call(
+            "pane.split", ShowTabParams(direction: direction, content: .init(tab: id)), as: JSONValue.self)
     }
 }

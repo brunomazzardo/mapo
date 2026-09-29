@@ -238,7 +238,6 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
     let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
     let mut first = true;
-    let mut exited: Option<i32> = None;
     loop {
         // Connect, retrying for 30 s with backoff from 100 ms to 2 s.
         let deadline = tokio::time::Instant::now() + RECONNECT_FOR;
@@ -255,6 +254,13 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
                         eprintln!("mapo attach: {}", e.message);
                     }
                     return if first { 1 } else { 0 };
+                }
+                Err(e) if e.kind() == ErrorKind::Conflict => {
+                    // A stopped tab: nothing to attach to until it restarts.
+                    log(&instance, &format!("not attachable: {}", e.message));
+                    let msg = format!("\r\n\x1b[2m[{}]\x1b[0m\r\n", e.message);
+                    write_out(msg.as_bytes()).await;
+                    return 3;
                 }
                 Err(e) => {
                     log(&instance, &format!("connect failed: {}", e.message));
@@ -298,9 +304,12 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
                         }
                     }
                     Ok(Some(Frame::Exit(code))) => {
-                        exited = Some(code);
+                        // The shell is gone; reconnecting would only replay it again. The surface
+                        // shows its exit bar, and Restart (tab.restart) builds a new surface.
                         let msg = format!("\r\n\x1b[2m[shell exited with code {code}]\x1b[0m\r\n");
                         write_out(msg.as_bytes()).await;
+                        log(&instance, &format!("shell exited with code {code}"));
+                        return 3;
                     }
                     Ok(Some(Frame::Pong)) => last_pong = tokio::time::Instant::now(),
                     Ok(Some(Frame::Ping)) => {
@@ -360,7 +369,6 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
         if args.replay_only {
             return 1;
         }
-        let _ = exited;
         log(&instance, "connection lost; reconnecting");
         write_out(b"\r\n\x1b[2m[mapo] reconnecting\xe2\x80\xa6\x1b[0m").await;
     }

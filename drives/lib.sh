@@ -14,7 +14,7 @@ MAPO_ROOT=${MAPO_ROOT:-${${(%):-%x}:A:h:h}}
 MAPO_PROFILE=${MAPO_PROFILE:-debug}
 MAPO_BIN="$MAPO_ROOT/target/$MAPO_PROFILE/mapo"
 case $MAPO_PROFILE in release) MAPO_CONFIG_NAME=Release ;; *) MAPO_CONFIG_NAME=Debug ;; esac
-MAPO_APP="$MAPO_ROOT/.build/xcode/Build/Products/$MAPO_CONFIG_NAME/Mapo.app"
+MAPO_APP=${MAPO_APP:-"$MAPO_ROOT/.build/xcode/Build/Products/$MAPO_CONFIG_NAME/Mapo.app"}
 DRIVE_LOCK="$HOME/Library/Caches/mapo/drive.lock"
 
 typeset -gA BUDGET_MS

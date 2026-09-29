@@ -17,10 +17,30 @@ use crate::model::{self, Tab, Workspace};
 use crate::status::{Facts, status};
 use crate::store::{self, Write};
 
+mod panes;
+
 type Reply<T> = oneshot::Sender<Result<T, RpcError>>;
 
+/// `[attention] done-threshold-seconds` (R-TAB-11).
+const DONE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What the app reports it shows (`ui.visibility`, PROTOCOL §6.8).
+#[derive(Debug, Clone, Default)]
+struct Visibility {
+    key_window: bool,
+    visible: std::collections::HashSet<String>,
+    focused: Option<String>,
+}
+
+impl Visibility {
+    /// A person is looking at the tab: its pane is focused in the key window, workspace active.
+    fn viewing(&self, tab: &str, workspace: &str, active: Option<&str>) -> bool {
+        self.key_window && self.focused.as_deref() == Some(tab) && active == Some(workspace)
+    }
+}
+
 /// What the process host (mapo-term, wired by the daemon) must start for a tab.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LaunchSpec {
     pub tab_id: String,
     pub workspace_id: String,
@@ -31,6 +51,29 @@ pub struct LaunchSpec {
     /// The tab's `MAPO_TOKEN`; never log it.
     pub token: String,
     pub hook_token: String,
+}
+
+impl std::fmt::Debug for LaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchSpec")
+            .field("tab_id", &self.tab_id)
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("cwd", &self.cwd)
+            .field("token", &"***")
+            .finish_non_exhaustive()
+    }
+}
+
+/// A tab credential acting on something other than its own tab needs `force` (R-CTL-4).
+fn guard_tab_caller(caller: &Caller, own: bool, force: bool, what: &str) -> Result<(), RpcError> {
+    if caller.kind == CredentialKind::Tab && !own && !force {
+        return Err(
+            RpcError::forbidden(format!("an agent tab must pass --force to {what}"))
+                .with_hint("add --force if the user asked for it"),
+        );
+    }
+    Ok(())
 }
 
 /// Commands from the core to the process host.
@@ -132,6 +175,16 @@ impl CoreHandle {
                 | methods::TAB_CLOSE
                 | methods::TAB_RENAME
                 | methods::TAB_FOCUS
+                | methods::LAYOUT_GET
+                | methods::PANE_SPLIT
+                | methods::PANE_CLOSE
+                | methods::PANE_FOCUS
+                | methods::PANE_RESIZE
+                | methods::PANE_EQUALIZE
+                | methods::TAB_RESTART
+                | methods::UI_VISIBILITY
+                | methods::WORKSPACE_MOVE
+                | methods::TAB_MOVE
         )
     }
 
@@ -239,6 +292,8 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
         home: opts.home,
         host: opts.host,
         tokens: Default::default(),
+        pane_mru: Default::default(),
+        visibility: Visibility::default(),
     };
     if core
         .active
@@ -249,6 +304,9 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
     }
     for t in 0..core.tabs.len() {
         core.launch(t);
+    }
+    for ws in 0..core.workspaces.len() {
+        core.refresh_branch(ws);
     }
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
     tokio::spawn(async move {
@@ -272,6 +330,9 @@ struct Core {
     host: mpsc::UnboundedSender<HostCmd>,
     /// Tab token → tab id. Revoked when the tab closes; new on every launch.
     tokens: std::collections::HashMap<String, String>,
+    /// Workspace id → recently focused pane ids, most recent last (R-LAY-3). Not persisted.
+    pane_mru: std::collections::HashMap<String, Vec<String>>,
+    visibility: Visibility,
 }
 
 impl Core {
@@ -379,6 +440,7 @@ impl Core {
             methods::WORKSPACE_DELETE => {
                 let p: WorkspaceRef = parse_params(params)?;
                 let idx = self.find_workspace(&p.workspace)?;
+                guard_tab_caller(caller, false, p.force, "delete a workspace")?;
                 self.delete_workspace(idx, p.force)?;
                 Ok(json!({ "deleted": true }))
             }
@@ -401,6 +463,8 @@ impl Core {
             methods::TAB_CLOSE => {
                 let p: TabRef = parse_params(params)?;
                 let t = self.resolve_tab(p.tab.as_deref(), p.workspace.as_deref(), caller)?;
+                let own = caller.tab_id.as_deref() == Some(self.tabs[t].id.as_str());
+                guard_tab_caller(caller, own, p.force, "close another tab")?;
                 self.close_tab(t, p.force)?;
                 Ok(json!({ "closed": true }))
             }
@@ -423,12 +487,100 @@ impl Core {
                 self.touch_tab(t);
                 to_value(&self.tab_summary(&self.tabs[t]))
             }
+            methods::WORKSPACE_MOVE => {
+                let p: mapo_protocol::types::WorkspaceMove = parse_params(params)?;
+                let idx = self.find_workspace(&p.workspace)?;
+                if p.index >= self.workspaces.len() {
+                    return Err(RpcError::invalid(format!(
+                        "index {} is out of range; there are {} workspaces",
+                        p.index,
+                        self.workspaces.len()
+                    )));
+                }
+                let ws = self.workspaces.remove(idx);
+                self.workspaces.insert(p.index, ws);
+                for (i, w) in self.workspaces.iter_mut().enumerate() {
+                    w.order = i as u32;
+                }
+                for w in &self.workspaces {
+                    self.pending.push(Write::Workspace(w.clone()));
+                }
+                // Siblings shifted too: announce each so clients never sort on stale orders.
+                for i in 0..self.workspaces.len() {
+                    if i != p.index {
+                        let summary = self.ws_summary(&self.workspaces[i]);
+                        self.ring.push("workspace.updated", json!(summary));
+                    }
+                }
+                let moved = self.ws_summary(&self.workspaces[p.index]);
+                self.ring.push("workspace.moved", json!(moved));
+                to_value(&moved)
+            }
+            methods::TAB_MOVE => {
+                let p: mapo_protocol::types::TabMove = parse_params(params)?;
+                let t = self.resolve_tab(p.tab.as_deref(), p.workspace.as_deref(), caller)?;
+                let ws_id = self.tabs[t].workspace_id.clone();
+                let mut ids: Vec<String> = self.tabs_of(&ws_id).map(|x| x.id.clone()).collect();
+                if p.index >= ids.len() {
+                    return Err(RpcError::invalid(format!(
+                        "index {} is out of range; the workspace has {} tabs",
+                        p.index,
+                        ids.len()
+                    )));
+                }
+                let id = self.tabs[t].id.clone();
+                ids.retain(|x| *x != id);
+                ids.insert(p.index, id.clone());
+                for (i, tid) in ids.iter().enumerate() {
+                    if let Some(k) = self.tab_index(tid) {
+                        self.tabs[k].order = i as u32;
+                        self.pending.push(Write::Tab(self.tabs[k].clone()));
+                        if *tid != id {
+                            let summary = self.tab_summary(&self.tabs[k]);
+                            self.ring.push("tab.updated", json!(summary));
+                        }
+                    }
+                }
+                let t = self.tab_index(&id).unwrap_or(t);
+                let moved = self.tab_summary(&self.tabs[t]);
+                self.ring.push("tab.moved", json!(moved));
+                to_value(&moved)
+            }
+            methods::UI_VISIBILITY => {
+                let p: mapo_protocol::types::Visibility = parse_params(params)?;
+                self.visibility = Visibility {
+                    key_window: p.key_window,
+                    visible: p.visible_tab_ids.into_iter().collect(),
+                    focused: p.focused_tab_id,
+                };
+                self.clear_viewed_done();
+                Ok(json!({}))
+            }
+            methods::TAB_RESTART => {
+                let p: TabRef = parse_params(params)?;
+                let t = self.resolve_tab(p.tab.as_deref(), p.workspace.as_deref(), caller)?;
+                if self.tabs[t].facts.stopped_exit.is_none() {
+                    return Err(RpcError::conflict(format!(
+                        "tab \"{}\" is still running; restart only restarts a stopped shell",
+                        self.tabs[t].name
+                    )));
+                }
+                self.launch(t);
+                self.touch_tab(t);
+                to_value(&self.tab_summary(&self.tabs[t]))
+            }
             methods::TAB_FOCUS => {
                 let p: TabRef = parse_params(params)?;
                 let t = self.resolve_tab(p.tab.as_deref(), p.workspace.as_deref(), caller)?;
                 self.focus_tab(t);
                 to_value(&self.tab_summary(&self.tabs[t]))
             }
+            methods::LAYOUT_GET
+            | methods::PANE_SPLIT
+            | methods::PANE_CLOSE
+            | methods::PANE_FOCUS
+            | methods::PANE_RESIZE
+            | methods::PANE_EQUALIZE => self.pane_call(method, params, caller),
             other => Err(RpcError::invalid(format!("unknown method {other}"))),
         }
     }
@@ -521,7 +673,8 @@ impl Core {
     fn tab_summary(&self, t: &Tab) -> TabSummary {
         let (state, label) = status(&t.facts);
         let ws = self.ws_index(&t.workspace_id).map(|i| &self.workspaces[i]);
-        let shown = ws.is_some_and(|w| model::shown_tab(&w.layout) == Some(t.id.as_str()));
+        let pane = ws.and_then(|w| crate::layout::pane_of_tab(&w.layout, &t.id));
+        let shown = pane.is_some();
         TabSummary {
             id: t.id.clone(),
             workspace_id: t.workspace_id.clone(),
@@ -534,15 +687,16 @@ impl Core {
             launch: t.launch.clone(),
             state,
             state_label: label,
-            state_detail: t.launch_error.as_ref().map(|e| e.message.clone()),
+            state_detail: t
+                .launch_error
+                .as_ref()
+                .map(|e| e.message.clone())
+                .or_else(|| crate::status::detail(&t.facts)),
             status_source: "shell".into(),
             program: t.program.clone(),
-            visible: shown && self.active.as_deref() == Some(t.workspace_id.as_str()),
-            pane_id: if shown {
-                ws.map(|w| model::pane_id(&w.layout).to_owned())
-            } else {
-                None
-            },
+            visible: (shown && self.active.as_deref() == Some(t.workspace_id.as_str()))
+                || self.visibility.visible.contains(&t.id),
+            pane_id: pane.map(str::to_owned),
             last_exit: t.last_exit,
             launch_error: t.launch_error.clone(),
         }
@@ -570,7 +724,7 @@ impl Core {
             summary: String::new(),
             attention_count: tabs.iter().filter(|t| t.state == State::NeedsYou).count() as u32,
             tab_count: tabs.len() as u32,
-            branch: None,
+            branch: w.branch.clone(),
         }
     }
 
@@ -613,6 +767,7 @@ impl Core {
             .push(Write::Workspace(self.workspaces[idx].clone()));
         self.ring
             .push("layout.updated", json!(self.workspaces[idx].layout));
+        self.refresh_branch(idx);
     }
 
     fn create_workspace(&mut self, name: Option<String>) -> Result<usize, RpcError> {
@@ -631,6 +786,7 @@ impl Core {
             .unwrap_or(0);
         self.workspaces.push(Workspace {
             layout: model::single_pane(&id, None),
+            branch: None,
             id,
             name,
             order,
@@ -658,6 +814,7 @@ impl Core {
         self.pending
             .push(Write::Meta("active_workspace".into(), id.clone()));
         self.ring.push("workspace.activated", json!({ "id": id }));
+        self.clear_viewed_done();
     }
 
     fn busy_tab(&self, t: &Tab) -> bool {
@@ -711,6 +868,13 @@ impl Core {
     }
 
     fn create_tab(&mut self, p: TabCreate, caller: &Caller) -> Result<usize, RpcError> {
+        if let Some(placement) = p.placement.as_deref()
+            && !matches!(placement, "focused" | "right" | "down" | "background")
+        {
+            return Err(RpcError::invalid(format!(
+                "placement must be focused, right, down or background, not \"{placement}\""
+            )));
+        }
         let ws = match (p.workspace.as_deref(), &caller.workspace_id, &self.active) {
             (None, None, None) => self.create_workspace(None)?,
             _ => self.resolve_workspace(p.workspace.as_deref(), caller)?,
@@ -745,10 +909,10 @@ impl Core {
                 return Err(RpcError::invalid(format!("cwd must be absolute: {c}")));
             }
             Some(c) => c,
-            None => model::shown_tab(&self.workspaces[ws].layout)
-                .and_then(|id| self.tab_index(id))
-                .map(|i| self.tabs[i].cwd.clone())
-                .unwrap_or_else(|| self.home.clone()),
+            None => {
+                let focused = self.workspaces[ws].layout.focused_pane_id.clone();
+                self.pane_cwd(ws, &focused)
+            }
         };
         let order = self.tabs_of(&ws_id).map(|t| t.order + 1).max().unwrap_or(0);
         let tab = Tab {
@@ -772,19 +936,16 @@ impl Core {
             last_exit: None,
             launch_error: None,
             program: None,
+            command_started: None,
         };
         self.tabs.push(tab);
         let t = self.tabs.len() - 1;
         self.pending.push(Write::Tab(self.tabs[t].clone()));
         let focus = p.focus.unwrap_or(false) && p.placement.as_deref() != Some("background");
-        let pane_empty = model::shown_tab(&self.workspaces[ws].layout).is_none();
-        if focus || (pane_empty && p.placement.as_deref() != Some("background")) {
-            model::show_in_pane(&mut self.workspaces[ws].layout, Some(&self.tabs[t].id));
-            self.layout_changed(ws);
-        }
         self.launch(t);
         self.ring
             .push("tab.created", json!(self.tab_summary(&self.tabs[t])));
+        self.place_new_tab(t, p.placement.as_deref(), focus);
         if focus {
             self.activate(ws);
         }
@@ -810,16 +971,7 @@ impl Core {
             json!({ "id": tab.id, "workspaceId": tab.workspace_id }),
         );
         if let Some(ws) = self.ws_index(&tab.workspace_id) {
-            if model::shown_tab(&self.workspaces[ws].layout) == Some(tab.id.as_str()) {
-                let siblings: Vec<&Tab> = self.tabs_of(&tab.workspace_id).collect();
-                let next = siblings
-                    .iter()
-                    .find(|s| s.order > tab.order)
-                    .or(siblings.last())
-                    .map(|s| s.id.clone());
-                model::show_in_pane(&mut self.workspaces[ws].layout, next.as_deref());
-                self.layout_changed(ws);
-            }
+            self.unshow_tab(ws, &tab.id);
             self.touch_workspace(ws);
         }
         Ok(())
@@ -835,15 +987,61 @@ impl Core {
             return;
         };
         self.activate(ws);
-        if model::shown_tab(&self.workspaces[ws].layout) != Some(self.tabs[t].id.as_str()) {
-            model::show_in_pane(&mut self.workspaces[ws].layout, Some(&self.tabs[t].id));
-            self.layout_changed(ws);
-            self.touch_workspace(ws);
-        }
+        self.show_tab(t);
     }
 }
 
 impl Core {
+    /// Re-reads the branch of the workspace's shown tab and emits workspace.updated on change.
+    fn refresh_branch(&mut self, ws: usize) {
+        let cwd = model::shown_tab(&self.workspaces[ws].layout)
+            .and_then(|id| self.tab_index(id))
+            .map(|t| self.tabs[t].cwd.clone());
+        let branch = cwd.and_then(|c| mapo_git::branch::branch(std::path::Path::new(&c)));
+        if self.workspaces[ws].branch != branch {
+            self.workspaces[ws].branch = branch;
+            let summary = self.ws_summary(&self.workspaces[ws]);
+            self.ring.push("workspace.updated", json!(summary));
+        }
+    }
+
+    /// `done` clears once a person views the tab (UX §7.4).
+    fn clear_viewed_done(&mut self) {
+        let viewed: Vec<usize> = (0..self.tabs.len())
+            .filter(|&t| {
+                self.tabs[t].facts.done
+                    && self.visibility.viewing(
+                        &self.tabs[t].id,
+                        &self.tabs[t].workspace_id,
+                        self.active.as_deref(),
+                    )
+            })
+            .collect();
+        for t in viewed {
+            let before = status(&self.tabs[t].facts);
+            self.tabs[t].facts.done = false;
+            self.state_changed(t, before);
+        }
+    }
+
+    /// Emits tab.updated, plus tab.state and workspace.updated when the state changed.
+    fn state_changed(&mut self, t: usize, before: (State, String)) {
+        let after = status(&self.tabs[t].facts);
+        let summary = self.tab_summary(&self.tabs[t]);
+        self.ring.push("tab.updated", json!(summary));
+        if after.0 != before.0 {
+            self.ring.push(
+                "tab.state",
+                json!({ "tabId": summary.id, "workspaceId": summary.workspace_id, "state": after.0,
+                        "previous": before.0, "stateLabel": after.1, "source": "shell" }),
+            );
+            if let Some(ws) = self.ws_index(&summary.workspace_id) {
+                let ws_summary = self.ws_summary(&self.workspaces[ws]);
+                self.ring.push("workspace.updated", json!(ws_summary));
+            }
+        }
+    }
+
     /// Starts the tab's process, one launch at a time (contract 1).
     fn launch(&mut self, t: usize) {
         if self.tabs[t].facts.spawning {
@@ -893,6 +1091,10 @@ impl Core {
                 if tab.cwd != cwd {
                     tab.cwd = cwd;
                     persist = true;
+                    let ws_id = tab.workspace_id.clone();
+                    if let Some(ws) = self.ws_index(&ws_id) {
+                        self.refresh_branch(ws);
+                    }
                 }
             }
             TabFact::Title(title) => tab.live_title = title,
@@ -903,11 +1105,35 @@ impl Core {
             TabFact::Mark(Mark::CommandStart) => {
                 tab.facts.spawning = false;
                 tab.facts.in_command = true;
-                tab.facts.last_command_failed = None;
+                tab.facts.failed_exit = None;
+                tab.command_started = Some(std::time::Instant::now());
             }
             TabFact::Mark(Mark::CommandEnd(code)) => {
                 tab.facts.in_command = false;
-                tab.facts.last_command_failed = code.filter(|c| *c != 0);
+                let ran = tab.command_started.take().map(|t| t.elapsed());
+                let code = code.unwrap_or(0);
+                if let Some(ran) = ran {
+                    tab.last_exit = Some(mapo_protocol::types::LastExit {
+                        code,
+                        duration_ms: ran.as_millis() as u64,
+                    });
+                }
+                // R-TAB-11: a long command that finished while nobody viewed the tab asks for
+                // attention: done on exit 0, failed otherwise.
+                let long = ran.is_some_and(|r| r >= DONE_THRESHOLD);
+                let viewed = self.visibility.viewing(
+                    &self.tabs[t].id,
+                    &self.tabs[t].workspace_id,
+                    self.active.as_deref(),
+                );
+                let tab = &mut self.tabs[t];
+                if long && !viewed {
+                    if code == 0 {
+                        tab.facts.done = true;
+                    } else {
+                        tab.facts.failed_exit = Some(code);
+                    }
+                }
             }
             TabFact::Exited {
                 code,
@@ -920,6 +1146,10 @@ impl Core {
                     let _ = self.close_tab(t, true);
                     return;
                 }
+                // The shell is gone: drop its host handle so nothing attaches to a dead tab.
+                let _ = self.host.send(HostCmd::Close {
+                    tab_id: tab_id.to_owned(),
+                });
                 let tab = &mut self.tabs[t];
                 tab.facts = Facts {
                     kind: Some(tab.kind),
@@ -932,20 +1162,7 @@ impl Core {
         if persist {
             self.pending.push(Write::Tab(self.tabs[t].clone()));
         }
-        let after = status(&self.tabs[t].facts);
-        let summary = self.tab_summary(&self.tabs[t]);
-        self.ring.push("tab.updated", json!(summary));
-        if after.0 != before.0 {
-            self.ring.push(
-                "tab.state",
-                json!({ "tabId": summary.id, "workspaceId": summary.workspace_id, "state": after.0,
-                        "previous": before.0, "stateLabel": after.1, "source": "shell" }),
-            );
-            if let Some(ws) = self.ws_index(&summary.workspace_id) {
-                let ws_summary = self.ws_summary(&self.workspaces[ws]);
-                self.ring.push("workspace.updated", json!(ws_summary));
-            }
-        }
+        self.state_changed(t, before);
     }
 }
 

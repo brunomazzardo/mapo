@@ -153,7 +153,8 @@ struct EventSynthesizer {
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                 characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: keyCode)
         else { return }
-        window.sendEvent(event)
+        // Local event monitors (the rail's hold-⌘ hints) see NSApp.sendEvent, not window.sendEvent.
+        NSApp.sendEvent(event)
     }
 
     private static var eventNumber = 0

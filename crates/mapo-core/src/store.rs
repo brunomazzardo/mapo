@@ -41,6 +41,7 @@ pub struct Loaded {
 
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -95,6 +96,7 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
             order,
             agent_command,
             layout,
+            branch: None,
         });
     }
     let mut stmt = conn.prepare(
@@ -129,6 +131,7 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
             last_exit: None,
             launch_error: None,
             program: None,
+            command_started: None,
         })
     })?;
     for row in rows {

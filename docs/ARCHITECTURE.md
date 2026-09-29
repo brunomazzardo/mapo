@@ -93,6 +93,12 @@ The crate versions are the ones checked on 2026-09-28 (see research/core-crates.
 
 Verify before pinning.
 
+Justifications for the dependencies added in M1:
+- `ignore` 0.4.33 (Unlicense/MIT): gitignore-aware one-level listings with global and repo excludes, the engine ripgrep uses.
+- `notify` 8.2.0 (CC0): FSEvents watching without our own CoreServices bindings.
+- `notify-debouncer-full` 0.7.0 (MIT/Apache-2.0): the 150 ms debounce, with `NoCache` so watching a git dir doesn't walk the tree.
+- SwiftTerm 1.11.2 (MIT): the terminal renderer while GhosttyKit can't be acquired (see PROGRESS).
+
 Deliberately not used in v1:
 
 - **gix:** the git CLI plus a direct `.git/HEAD` read is enough and keeps builds fast.

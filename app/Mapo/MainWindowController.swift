@@ -1,6 +1,7 @@
 import AppKit
 import MapoAutomation
 import MapoClient
+import MapoProtocol
 import MapoTerminal
 import MapoUI
 
@@ -10,6 +11,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let instance: String
     private let metrics: UIMetrics
     private var paneArea: PaneAreaViewController?
+    /// Serves `explorer.*` (PROTOCOL §6.5).
+    let inspector: InspectorViewController
 
     private static let titleItem = NSToolbarItem.Identifier("toolbar.title")
     private static let railToggleItem = NSToolbarItem.Identifier("rail.toggle")
@@ -20,6 +23,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         self.client = client
         self.instance = client.store.instance
         self.metrics = metrics
+        self.inspector = InspectorViewController(client: client)
         let window = MapoWindow()
         super.init(window: window)
 
@@ -42,10 +46,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             store: client.store, registry: registry,
             actions: PaneAreaActions(
                 newShellTab: { [weak self] in self?.newShellTab() },
-                restartDaemon: { [weak self] in self?.restartDaemon() }))
+                restartDaemon: { [weak self] in self?.restartDaemon() },
+                perform: { [weak self] name, body in self?.run(name, body) },
+                closeTab: { [weak self] id in self?.closeTab(id: id) },
+                reportVisibility: { [weak self] key, visible, focused in
+                    self?.reportVisibility(keyWindow: key, visibleTabIds: visible, focusedTabId: focused)
+                }))
         paneArea = panes
+        window.onLeftMouseDown = { [weak panes] event in panes?.windowMouseDown(event) }
         window.contentViewController = MainSplitViewController(
-            rail: rail, panes: panes, inspector: InspectorViewController(), instance: instance)
+            rail: rail, panes: panes, inspector: inspector, instance: instance)
 
         let toolbar = NSToolbar(identifier: "main")
         toolbar.delegate = self
@@ -78,16 +88,111 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     func newWorkspace() {
         metrics.beginWorkspaceCreate()
+        paneArea?.expectFocusChange()
         run("New Workspace") { try await $0.newWorkspace() }
     }
 
     func newShellTab() {
         metrics.beginTabCreate()
+        paneArea?.expectFocusChange()
         run("New Shell Tab") { try await $0.newShellTab() }
     }
 
     func restartDaemon() {
         Task { await client.restartDaemon() }
+    }
+
+    // MARK: Pane and workspace commands (UX §4.2, §8)
+
+    /// The active workspace's focused tab.
+    private var focusedTab: TabSummary? {
+        let store = client.store
+        guard let workspaceId = store.activeWorkspaceId, let id = store.focusedTabId(inWorkspace: workspaceId)
+        else { return nil }
+        return store.tabs[id]
+    }
+
+    /// Split Right (⌘D) or Split Down (⇧⌘D). A split that would leave a pane under 200×120 beeps.
+    func splitPane(_ direction: String) {
+        guard client.store.activeWorkspace != nil else { return newShellTab() }
+        guard paneArea?.canSplitFocusedPane(direction) ?? true else { return NSSound.beep() }
+        metrics.beginPaneSplit()
+        paneArea?.expectFocusChange()
+        run("pane.split") { try await $0.splitPane(direction: direction) }
+    }
+
+    /// Close Pane (⌘W): the tab keeps running.
+    func closePane() {
+        run("pane.close") { try await $0.closePane() }
+    }
+
+    /// ⌥⌘ plus an arrow.
+    func focusPane(_ direction: String) {
+        paneArea?.expectFocusChange()
+        run("pane.focus") { try await $0.focusPane(direction: direction) }
+    }
+
+    func equalizePanes() {
+        run("pane.equalize") { try await $0.equalizePanes() }
+    }
+
+    /// Close Tab (⇧⌘W) on the focused tab.
+    func closeFocusedTab() {
+        guard let tab = focusedTab else { return NSSound.beep() }
+        closeTab(id: tab.id)
+    }
+
+    /// Close Tab with the R-TAB-7 confirmation when a program or command runs (UX §3.5).
+    func closeTab(id: String) {
+        guard let tab = client.store.tabs[id] else { return }
+        let busy = tab.program != nil || tab.state == .running
+        guard busy, let window else {
+            run("tab.close") { try await $0.closeTab(id: id, force: busy) }
+            return
+        }
+        Task {
+            let what = tab.program ?? "A command"
+            let confirmed = await ConfirmSheet.confirm(
+                on: window, title: "Close \"\(tab.name)\"?",
+                message: "\(what) is still running in this tab. Closing the tab stops it.", confirm: "Close Tab")
+            guard confirmed else { return }
+            run("tab.close") { try await $0.closeTab(id: id, force: true) }
+        }
+    }
+
+    /// Stop Command (⌘.): Ctrl-C to the focused tab's command.
+    func stopCommand() {
+        guard let tab = focusedTab, tab.state == .running else { return NSSound.beep() }
+        run("tab.stop") { try await $0.tabCommand("tab.stop", id: tab.id) }
+    }
+
+    /// Previous or Next Workspace (⌃⌘↑, ⌃⌘↓): rail order, no wrap.
+    func switchWorkspace(by offset: Int) {
+        let workspaces = client.store.workspaces
+        guard let current = workspaces.firstIndex(where: { $0.id == client.store.activeWorkspaceId }),
+            workspaces.indices.contains(current + offset)
+        else { return NSSound.beep() }
+        let id = workspaces[current + offset].id
+        metrics.beginWorkspaceSwitch(to: id)
+        paneArea?.expectFocusChange()
+        run("workspace.activate") { try await $0.activateWorkspace(id: id) }
+    }
+
+    var hasFocusedTab: Bool { focusedTab != nil }
+    var focusedTabIsRunning: Bool { focusedTab?.state == .running }
+    var hasActiveWorkspace: Bool { client.store.activeWorkspace != nil }
+
+    /// `ui.visibility`; a failure only logs.
+    private func reportVisibility(keyWindow: Bool, visibleTabIds: [String], focusedTabId: String?) {
+        let client = client
+        Task {
+            do {
+                try await client.reportVisibility(
+                    keyWindow: keyWindow, visibleTabIds: visibleTabIds, focusedTabId: focusedTabId)
+            } catch {
+                MapoLog.shared.debug("ui.visibility failed: \(error)")
+            }
+        }
     }
 
     var isConnected: Bool { client.store.isConnected }

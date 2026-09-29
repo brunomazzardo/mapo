@@ -56,7 +56,34 @@ pub(super) fn encode(msg: &impl serde::Serialize) -> Vec<u8> {
 }
 
 /// Bytes queued for the connection's writer task.
-pub(super) type Tx = mpsc::UnboundedSender<Vec<u8>>;
+/// A connection's outbound queue, counting the bytes not yet written so attach sessions can stop
+/// feeding a client that fell behind and resync it instead (PROTOCOL §8).
+#[derive(Clone)]
+pub(super) struct Tx {
+    inner: mpsc::UnboundedSender<Vec<u8>>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Tx {
+    pub(super) fn send(&self, bytes: Vec<u8>) -> Result<(), ()> {
+        let n = bytes.len();
+        self.queued
+            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        self.inner.send(bytes).map_err(|_| {
+            self.queued
+                .fetch_sub(n, std::sync::atomic::Ordering::Relaxed);
+        })
+    }
+
+    /// Bytes queued but not yet written to the socket.
+    pub(super) fn queued(&self) -> usize {
+        self.queued.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(super) async fn closed(&self) {
+        self.inner.closed().await;
+    }
+}
 
 type Pending = Arc<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
@@ -114,15 +141,25 @@ impl AppRoute {
 pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (inner_tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tx = Tx {
+        inner: inner_tx,
+        queued: queued.clone(),
+    };
     let writer = tokio::spawn(async move {
         while let Some(bytes) = rx.recv().await {
-            if write.write_all(&bytes).await.is_err() {
+            let n = bytes.len();
+            let ok = write.write_all(&bytes).await.is_ok();
+            queued.fetch_sub(n, std::sync::atomic::Ordering::Relaxed);
+            if !ok {
                 break;
             }
         }
         let _ = write.shutdown().await;
     });
+    // Requests in flight end with their connection (a Ctrl-C'd `tab wait` stops waiting).
+    let mut requests = tokio::task::JoinSet::new();
 
     let session = match hello(&shared, &mut reader, &tx).await {
         Some((s, None)) => s,
@@ -145,6 +182,7 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
         .next_conn
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let pending: Pending = Arc::default();
+    let watches = super::fs::Watches::default();
     loop {
         let line = tokio::select! {
             line = read_line(&mut reader) => line,
@@ -153,6 +191,9 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
         match line {
             Ok(Line::Text(text)) if text.trim().is_empty() => continue,
             Ok(Line::Text(text)) => match Incoming::parse(&text) {
+                Ok(Incoming::Request(req)) if super::fs::is_watch(&req.method) => {
+                    let _ = tx.send(encode(&super::fs::watch(&shared, &watches, req)));
+                }
                 Ok(Incoming::Request(req)) if req.method == methods::EVENTS_SUBSCRIBE => {
                     let (shared, tx) = (shared.clone(), tx.clone());
                     subscribe_task =
@@ -192,7 +233,8 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
                 Ok(Incoming::Request(req)) => {
                     let (shared, session, tx) = (shared.clone(), session.clone(), tx.clone());
                     let span = tracing::info_span!("req", id = ?req.id, method = %req.method, caller = ?session.caller.kind);
-                    tokio::spawn(
+                    while requests.try_join_next().is_some() {}
+                    requests.spawn(
                         async move {
                             let id = req.id.clone();
                             let resp = match dispatch(&shared, &session, req).await {
@@ -225,6 +267,7 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     if let Some(task) = subscribe_task {
         task.abort();
     }
+    requests.abort_all();
     if let Ok(mut p) = pending.lock() {
         // Dropping the senders fails any ui.* call still waiting on this app.
         p.clear();
@@ -323,6 +366,12 @@ async fn hello(
         attach: None,
     };
     if params.role == mapo_protocol::hello::Role::Attach {
+        if caller.kind != CredentialKind::App {
+            return fail(
+                Some(req.id),
+                RpcError::forbidden("attach needs the app credential"),
+            );
+        }
         let Some(attach) = params.attach else {
             return fail(
                 Some(req.id),
@@ -412,13 +461,25 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
             .call(&req.method, req.params, session.caller.clone())
             .await;
     }
-    if req.method.starts_with("ui.") {
+    if req.method == super::fs::FS_LIST {
+        return super::fs::list(shared, &req).await;
+    }
+    if req.method.starts_with("ui.") || req.method.starts_with("explorer.") {
+        // Driving the UI is the operator's: a tab token must not type into whatever has focus.
+        if session.caller.kind != CredentialKind::App {
+            return Err(RpcError::forbidden(format!(
+                "{} needs the app credential",
+                req.method
+            )));
+        }
         return ui(shared, &req).await;
     }
     match req.method.as_str() {
-        methods::TAB_SEND | methods::TAB_READ | methods::TAB_WAIT | methods::TAB_RUN => {
-            tab_io(shared, session, &req).await
-        }
+        methods::TAB_SEND
+        | methods::TAB_READ
+        | methods::TAB_WAIT
+        | methods::TAB_RUN
+        | methods::TAB_STOP => tab_io(shared, session, &req).await,
         methods::PING => {
             let _: Empty = parse_params(&req.params)?;
             to_value(&PingResult {
@@ -471,8 +532,16 @@ pub(super) async fn live_tab(
             .core
             .resolve_tab(tab.clone(), workspace.clone(), session.caller.clone())
             .await?;
-        if let Some(handle) = shared.host.get(&summary.id) {
+        if let Some(handle) = shared.host.get(&summary.id).filter(|h| !h.exited()) {
             return Ok((summary, handle));
+        }
+        if summary.state == mapo_protocol::types::State::Stopped {
+            let code = summary.last_exit.map_or(0, |e| e.code);
+            return Err(RpcError::conflict(format!(
+                "tab \"{}\" stopped: its shell exited with code {code}",
+                summary.name
+            ))
+            .with_hint(format!("mapo tab restart {}", summary.name)));
         }
         let launching = summary.state == mapo_protocol::types::State::Starting
             && summary.launch_error.is_none();
@@ -511,6 +580,13 @@ async fn tab_io(shared: &Shared, session: &Session, req: &Request) -> Result<Val
             };
             let sent = h.send(&p.text, p.execute, paste).await?;
             Ok(json!({ "sent": sent }))
+        }
+        methods::TAB_STOP => {
+            let p: mapo_protocol::types::TabRef = parse_params(&req.params)?;
+            let (summary, h) = live_tab(shared, session, p.tab, p.workspace).await?;
+            // Ctrl-C to the foreground job, as a person would press it.
+            h.write(b"\x03").await;
+            to_value(&summary)
         }
         methods::TAB_READ => {
             let p: TabRead = parse_params(&req.params)?;

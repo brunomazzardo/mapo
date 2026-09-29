@@ -19,6 +19,12 @@ pub enum WorkspaceCommand {
     Rename { name: String, new_name: String },
     /// Make a workspace the active one.
     Activate { name: String },
+    /// Move a workspace to a zero-based position in the rail.
+    Move {
+        name: String,
+        #[arg(long)]
+        index: usize,
+    },
     /// Delete a workspace and close its tabs.
     Delete {
         name: String,
@@ -76,6 +82,16 @@ pub enum TabCommand {
         #[arg(long)]
         until: String,
     },
+    /// Move a tab to a zero-based position in its workspace.
+    Move {
+        name: String,
+        #[arg(long)]
+        index: usize,
+    },
+    /// Stop the running command (Ctrl-C).
+    Stop { name: String },
+    /// Restart a stopped tab's shell in its last folder.
+    Restart { name: String },
     /// Run a command at the tab's prompt and print its output; exits with its code.
     Run {
         name: String,
@@ -150,6 +166,10 @@ pub fn workspace(cli: &Cli, cmd: &WorkspaceCommand) -> Result<(), CliError> {
             json!({ "workspace": name, "name": new_name }),
         ),
         WorkspaceCommand::Activate { name } => ("workspace.activate", json!({ "workspace": name })),
+        WorkspaceCommand::Move { name, index } => (
+            "workspace.move",
+            json!({ "workspace": name, "index": index }),
+        ),
         WorkspaceCommand::Delete { name, force } => (
             "workspace.delete",
             json!({ "workspace": name, "force": force }),
@@ -251,6 +271,9 @@ pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
             ("tab.rename", json!({ "tab": name, "name": new_name }))
         }
         TabCommand::Focus { name } => ("tab.focus", json!({ "tab": name })),
+        TabCommand::Stop { name } => ("tab.stop", json!({ "tab": name })),
+        TabCommand::Move { name, index } => ("tab.move", json!({ "tab": name, "index": index })),
+        TabCommand::Restart { name } => ("tab.restart", json!({ "tab": name })),
         TabCommand::Send { .. }
         | TabCommand::Read { .. }
         | TabCommand::Wait { .. }

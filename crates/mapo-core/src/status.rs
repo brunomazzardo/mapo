@@ -13,16 +13,19 @@ pub struct Facts {
     pub stopped_exit: Option<i32>,
     /// Between OSC 133;C and 133;D.
     pub in_command: bool,
-    /// The last command failed and no new command started since (R-ST-5).
-    pub last_command_failed: Option<i32>,
+    /// A long command finished with this non-zero code while nobody viewed the tab; clears when
+    /// the next command starts (R-TAB-11, R-ST-5).
+    pub failed_exit: Option<i32>,
+    /// A long command finished with 0 while nobody viewed the tab; clears once viewed (UX §7.4).
+    pub done: bool,
 }
 
 pub fn status(f: &Facts) -> (State, String) {
     if f.launch_error {
         return (State::Failed, "Couldn't start".into());
     }
-    if let Some(code) = f.stopped_exit {
-        return (State::Stopped, format!("Stopped (exit {code})"));
+    if f.stopped_exit.is_some() {
+        return (State::Stopped, "Stopped".into());
     }
     if f.stopping {
         return (State::Stopping, "Stopping".into());
@@ -38,10 +41,23 @@ pub fn status(f: &Facts) -> (State, String) {
         };
         return (State::Running, word.into());
     }
-    if let Some(code) = f.last_command_failed {
-        return (State::Failed, format!("Failed (exit {code})"));
+    if f.failed_exit.is_some() {
+        return (State::Failed, "Failed".into());
+    }
+    if f.done {
+        return (State::Done, "Done".into());
     }
     (State::Idle, String::new())
+}
+
+/// The short detail shown next to a state word ("exit 1"), when there is one.
+pub fn detail(f: &Facts) -> Option<String> {
+    if f.launch_error {
+        return None;
+    }
+    f.failed_exit
+        .or(f.stopped_exit)
+        .map(|code| format!("exit {code}"))
 }
 
 #[cfg(test)]
@@ -72,7 +88,7 @@ mod tests {
                     stopped_exit: Some(3),
                     ..Default::default()
                 },
-                (State::Stopped, "Stopped (exit 3)"),
+                (State::Stopped, "Stopped"),
             ),
             (
                 Facts {
@@ -91,14 +107,21 @@ mod tests {
             ),
             (
                 Facts {
-                    last_command_failed: Some(1),
+                    failed_exit: Some(1),
                     ..Default::default()
                 },
-                (State::Failed, "Failed (exit 1)"),
+                (State::Failed, "Failed"),
             ),
             (
                 Facts {
-                    last_command_failed: Some(1),
+                    done: true,
+                    ..Default::default()
+                },
+                (State::Done, "Done"),
+            ),
+            (
+                Facts {
+                    failed_exit: Some(1),
                     in_command: true,
                     ..Default::default()
                 },

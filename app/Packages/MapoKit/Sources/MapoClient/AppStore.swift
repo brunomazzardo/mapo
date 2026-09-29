@@ -109,7 +109,7 @@ public final class AppStore {
             }
         case .layoutUpdated(let layout):
             layouts[layout.workspaceId] = layout
-        case .attentionChanged, .appConnected, .appDisconnected, .daemonStopping, .other:
+        case .attentionChanged, .appConnected, .appDisconnected, .daemonStopping, .fsChanged, .gitChanged, .other:
             break
         }
         return true

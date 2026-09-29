@@ -9,6 +9,9 @@ enum MainMenu {
         bar.addItem(submenu(fileMenu()))
         bar.addItem(submenu(editMenu()))
         bar.addItem(submenu(viewMenu()))
+        bar.addItem(submenu(workspaceMenu()))
+        bar.addItem(submenu(tabMenu()))
+        bar.addItem(submenu(paneMenu()))
         let window = windowMenu()
         bar.addItem(submenu(window))
         NSApp.windowsMenu = window
@@ -61,6 +64,58 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.addItem(item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]))
         return menu
+    }
+
+    private static func workspaceMenu() -> NSMenu {
+        let menu = NSMenu(title: "Workspace")
+        menu.addItem(
+            item("Previous Workspace", #selector(AppDelegate.previousWorkspace(_:)), arrow(.up), [.command, .control]))
+        menu.addItem(
+            item("Next Workspace", #selector(AppDelegate.nextWorkspace(_:)), arrow(.down), [.command, .control]))
+        return menu
+    }
+
+    private static func tabMenu() -> NSMenu {
+        let menu = NSMenu(title: "Tab")
+        menu.addItem(item("Stop Command", #selector(AppDelegate.stopCommand(_:)), "."))
+        menu.addItem(.separator())
+        menu.addItem(item("Close Tab", #selector(AppDelegate.closeTab(_:)), "w", [.command, .shift]))
+        return menu
+    }
+
+    private static func paneMenu() -> NSMenu {
+        let menu = NSMenu(title: "Pane")
+        menu.addItem(item("Split Right", #selector(AppDelegate.splitRight(_:)), "d"))
+        menu.addItem(item("Split Down", #selector(AppDelegate.splitDown(_:)), "d", [.command, .shift]))
+        menu.addItem(.separator())
+        let focus: [(String, Selector, Arrow)] = [
+            ("Focus Pane Left", #selector(AppDelegate.focusPaneLeft(_:)), .left),
+            ("Focus Pane Right", #selector(AppDelegate.focusPaneRight(_:)), .right),
+            ("Focus Pane Up", #selector(AppDelegate.focusPaneUp(_:)), .up),
+            ("Focus Pane Down", #selector(AppDelegate.focusPaneDown(_:)), .down),
+        ]
+        for (title, action, key) in focus {
+            menu.addItem(item(title, action, arrow(key), [.command, .option]))
+        }
+        menu.addItem(.separator())
+        menu.addItem(item("Equalize Panes", #selector(AppDelegate.equalizePanes(_:))))
+        menu.addItem(item("Close Pane", #selector(AppDelegate.closePane(_:)), "w"))
+        return menu
+    }
+
+    private enum Arrow {
+        case left, right, up, down
+    }
+
+    private static func arrow(_ key: Arrow) -> String {
+        let scalar: Int
+        switch key {
+        case .left: scalar = NSLeftArrowFunctionKey
+        case .right: scalar = NSRightArrowFunctionKey
+        case .up: scalar = NSUpArrowFunctionKey
+        case .down: scalar = NSDownArrowFunctionKey
+        }
+        return UnicodeScalar(scalar).map { String(Character($0)) } ?? ""
     }
 
     private static func windowMenu() -> NSMenu {

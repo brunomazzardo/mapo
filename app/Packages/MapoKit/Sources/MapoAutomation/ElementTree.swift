@@ -108,6 +108,16 @@ struct ElementTreeBuilder {
             guard let view = item.view else { continue }
             children += walk.elements(of: view, depth: depth - 1)
         }
+        // A sheet on the window (`dialog`, UX §3.5) is its own window; list it as a child so drives see it.
+        if let sheet = window.attachedSheet, let content = sheet.contentView, depth > 2 {
+            let sheetId = sheet.accessibilityIdentifier()
+            children.append(
+                UIElement(
+                    object: sheet, id: sheetId.isEmpty ? nil : sheetId, role: "sheet", label: sheet.title,
+                    value: nil, frame: ElementGeometry.windowFrame(ofScreenRect: sheet.frame, in: window),
+                    focused: sheet.isKeyWindow, enabled: true,
+                    children: walk.elements(of: content, depth: depth - 2)))
+        }
         let identifier = window.accessibilityIdentifier()
         return UIElement(
             object: window, id: identifier.isEmpty ? nil : identifier, role: "window",

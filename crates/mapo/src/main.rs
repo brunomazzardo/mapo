@@ -1,6 +1,8 @@
 //! `mapo`: the daemon, attach client, hooks, MCP server and CLI in one binary (DECISIONS D-26).
 
 mod cli;
+mod client;
+mod daemon;
 mod output;
 
 use clap::Parser;

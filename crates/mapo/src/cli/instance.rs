@@ -1,6 +1,5 @@
 //! `mapo instance show|list|wait|stop|clean`: client-side, no daemon needed (PROTOCOL §9).
 
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -9,7 +8,11 @@ use mapo_instance::{Instance, Paths, process_alive, process_matches, read_pid_fi
 use serde_json::{Value, json};
 
 use super::Cli;
-use crate::output::{CliError, Kind, print_json};
+use mapo_protocol::ErrorKind as Kind;
+use mapo_protocol::hello::Role;
+
+use crate::client::Client;
+use crate::output::{CliError, from_instance, print_json};
 
 #[derive(Args)]
 pub struct InstanceArgs {
@@ -62,10 +65,14 @@ fn daemon_live(instance: &Instance, paths: &Paths) -> Option<(i32, PathBuf)> {
 }
 
 fn show(instance: &Instance) -> Result<Value, CliError> {
-    let paths = instance.paths()?;
-    mapo_instance::ensure_private_dir(&paths.runtime_dir)?;
+    let paths = instance.paths().map_err(from_instance)?;
+    mapo_instance::ensure_private_dir(&paths.runtime_dir).map_err(from_instance)?;
     let daemon = daemon_live(instance, &paths);
     let app = live(&paths.app_pid_file, &[]);
+    let hello = daemon
+        .as_ref()
+        .and_then(|_| Client::connect(instance, Role::Cli, Some(Duration::from_secs(2))).ok())
+        .map(|c| c.hello);
     let mut out = json!({
         "name": instance.name,
         "source": instance.source,
@@ -80,8 +87,8 @@ fn show(instance: &Instance) -> Result<Value, CliError> {
         "running": daemon.is_some(),
         "pid": daemon.as_ref().map(|d| d.0),
         "exe": daemon.as_ref().map(|d| d.1.clone()),
-        "bootId": Value::Null,
-        "protocol": Value::Null,
+        "bootId": hello.as_ref().map(|h| h.boot_id.clone()),
+        "protocol": hello.as_ref().map(|h| h.protocol),
     });
     out["app"] = json!({ "running": app.is_some(), "pid": app.as_ref().map(|a| a.0) });
     Ok(out)
@@ -102,8 +109,8 @@ fn dir_size(path: &Path) -> u64 {
 }
 
 fn list() -> Result<Value, CliError> {
-    let data_root = mapo_instance::data_root()?;
-    let runtime = mapo_instance::runtime_dir()?;
+    let data_root = mapo_instance::data_root().map_err(from_instance)?;
+    let runtime = mapo_instance::runtime_dir().map_err(from_instance)?;
     let mut names = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(&data_root)
         .into_iter()
@@ -146,10 +153,11 @@ fn list() -> Result<Value, CliError> {
 }
 
 fn wait(instance: &Instance, timeout: Duration) -> Result<(), CliError> {
-    let paths = instance.paths()?;
     let deadline = Instant::now() + timeout;
     loop {
-        if UnixStream::connect(&paths.socket).is_ok() {
+        if let Ok(mut client) = Client::connect(instance, Role::Cli, Some(Duration::from_secs(2)))
+            && client.call("ping", serde_json::json!({})).is_ok()
+        {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -161,7 +169,7 @@ fn wait(instance: &Instance, timeout: Duration) -> Result<(), CliError> {
                     timeout.as_millis()
                 ),
             )
-            .hint(format!("mapo --instance {} daemon", instance.name)));
+            .with_hint(format!("mapo --instance {} daemon", instance.name)));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -186,14 +194,21 @@ fn wait_exit(pid: i32, timeout: Duration) -> bool {
 }
 
 fn stop(instance: &Instance) -> Result<(), CliError> {
-    instance.refuse_main_from_worktree()?;
-    let paths = instance.paths()?;
+    instance
+        .refuse_main_from_worktree()
+        .map_err(from_instance)?;
+    let paths = instance.paths().map_err(from_instance)?;
     let Some((pid, exe)) = daemon_live(instance, &paths) else {
         return Ok(());
     };
-    // T0.3 sends daemon.shutdown first and waits 5 s; until then SIGTERM runs the same path.
+    if let Ok(mut client) = Client::connect(instance, Role::Cli, Some(Duration::from_secs(2))) {
+        let _ = client.call("daemon.shutdown", serde_json::json!({}));
+        if wait_exit(pid, Duration::from_secs(5)) {
+            return Ok(());
+        }
+    }
     for (sig, grace) in [
-        (rustix::process::Signal::TERM, Duration::from_secs(5)),
+        (rustix::process::Signal::TERM, Duration::from_secs(3)),
         (rustix::process::Signal::KILL, Duration::from_secs(3)),
     ] {
         if !process_matches(pid, &exe, &["daemon", instance.name.as_str()]) {
@@ -214,14 +229,16 @@ fn stop(instance: &Instance) -> Result<(), CliError> {
 }
 
 fn clean(instance: &Instance) -> Result<(), CliError> {
-    instance.refuse_main_from_worktree()?;
-    let paths = instance.paths()?;
+    instance
+        .refuse_main_from_worktree()
+        .map_err(from_instance)?;
+    let paths = instance.paths().map_err(from_instance)?;
     if let Some((pid, _)) = daemon_live(instance, &paths) {
         return Err(CliError::new(
             Kind::Conflict,
             format!("instance {} is running (daemon pid {pid})", instance.name),
         )
-        .hint(format!("mapo --instance {} instance stop", instance.name)));
+        .with_hint(format!("mapo --instance {} instance stop", instance.name)));
     }
     if let Some((pid, _)) = live(&paths.app_pid_file, &[]) {
         return Err(CliError::new(

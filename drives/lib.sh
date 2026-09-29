@@ -260,7 +260,7 @@ drive_end() {
     local logdir
     logdir=$("$MAPO_BIN" --instance "$DRIVE_INSTANCE" instance show --json 2>/dev/null | jq -r .logDir)
     for f in "$logdir"/mapod.*.log(N) "$logdir"/app.*.log(N); do
-        print "--- tail $f:t" >> "$EVIDENCE/log.txt"
+        print -r -- "--- tail $f:t" >> "$EVIDENCE/log.txt"
         tail -n 200 "$f" >> "$EVIDENCE/log.txt"
     done
     local result=PASS

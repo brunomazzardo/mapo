@@ -88,7 +88,6 @@ build: guard
 daemon: guard
     #!/bin/zsh
     set -euo pipefail
-    if ! {{bin}} daemon --help >/dev/null 2>&1; then echo "not yet: PLAN T0.3" >&2; exit 1; fi
     cargo build -p mapo -j {{jobs}} {{cargo_profile_flag}}
     exec {{bin}} daemon --instance {{instance}} --foreground
 

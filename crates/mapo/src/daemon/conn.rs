@@ -237,7 +237,16 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
                     requests.spawn(
                         async move {
                             let id = req.id.clone();
-                            let resp = match dispatch(&shared, &session, req).await {
+                            let record = should_record(&req.method, &session);
+                            let (method, target) =
+                                (req.method.clone(), activity_target(&req.params));
+                            let result = dispatch(&shared, &session, req).await;
+                            if record {
+                                shared
+                                    .core
+                                    .record_activity(activity(&session, method, target, &result));
+                            }
+                            let resp = match result {
                                 Ok(v) => Response::ok(id, v),
                                 Err(e) => {
                                     tracing::info!(kind = e.kind().as_str(), "error");
@@ -489,6 +498,12 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
     if req.method == methods::FILE_OPEN {
         return super::file::open(shared, session, &req).await;
     }
+    if req.method == methods::TAB_ASK {
+        return tab_ask(shared, session, &req.params).await;
+    }
+    if req.method == methods::EVENTS_WAIT {
+        return events_wait(shared, &req.params).await;
+    }
     if req.method.starts_with("ui.") || req.method.starts_with("explorer.") {
         // Driving the UI is the operator's: a tab token must not type into whatever has focus.
         if session.caller.kind != CredentialKind::App {
@@ -714,6 +729,207 @@ async fn terminals(shared: &Shared) -> Vec<Value> {
 fn summary_kind_is_agent(s: &mapo_protocol::types::TabSummary) -> bool {
     s.kind == mapo_protocol::types::TabKind::Agent
         || s.agent.as_ref().is_some_and(|a| a.hooks_connected)
+}
+
+/// Read-only methods never go in the activity log.
+const READ_ONLY: &[&str] = &[
+    "ping",
+    "instance.info",
+    "state.snapshot",
+    "events.subscribe",
+    "events.wait",
+    "workspace.list",
+    "tab.list",
+    "tab.read",
+    "tab.wait",
+    "layout.get",
+    "fs.list",
+    "fs.watch",
+    "fs.unwatch",
+    "activity.list",
+    "ui.window",
+    "ui.tree",
+    "ui.snapshot",
+    "ui.wait",
+    "ui.metrics",
+    "ui.visibility",
+    "hook.report",
+    "app.register",
+];
+
+/// R-CTL-6: every mutating request from an agent tab or the automation surface (`ui.*` input).
+fn should_record(method: &str, session: &Session) -> bool {
+    if READ_ONLY.contains(&method) {
+        return false;
+    }
+    session.caller.kind == CredentialKind::Tab || method.starts_with("ui.")
+}
+
+fn activity_target(params: &Value) -> Option<String> {
+    ["tab", "workspace", "target", "path", "chord", "text"]
+        .iter()
+        .find_map(|k| match params.get(*k) {
+            Some(Value::String(s)) => Some(s.chars().take(80).collect()),
+            Some(v @ Value::Object(_)) => Some(v.to_string().chars().take(80).collect()),
+            _ => None,
+        })
+}
+
+fn activity(
+    session: &Session,
+    command: String,
+    target: Option<String>,
+    result: &Result<Value, RpcError>,
+) -> mapo_protocol::types::Activity {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let (outcome, error) = match result {
+        Ok(_) => ("ok", None),
+        Err(e) if e.kind() == mapo_protocol::ErrorKind::Forbidden => {
+            ("rejected", Some(e.message.clone()))
+        }
+        Err(e) => ("error", Some(e.message.clone())),
+    };
+    mapo_protocol::types::Activity {
+        id: uuid::Uuid::now_v7().to_string(),
+        at,
+        caller: mapo_protocol::types::ActivityCaller {
+            kind: if session.caller.kind == CredentialKind::Tab {
+                "tab"
+            } else {
+                "app"
+            }
+            .into(),
+            tab_id: session.caller.tab_id.clone(),
+            name: None,
+        },
+        command,
+        target,
+        outcome: outcome.into(),
+        error,
+    }
+}
+
+/// `tab.ask` (R-AG-5, PLAN T3.3): waits until the target agent is idle or done, pastes the prompt,
+/// confirms UserPromptSubmit within 10 s, waits for its Stop and returns the last assistant message.
+/// Fails with `needs_you` (exit 5) when the target needs the user, and with `timeout`.
+async fn tab_ask(shared: &Shared, session: &Session, params: &Value) -> Result<Value, RpcError> {
+    use mapo_protocol::types::{State, TabAsk};
+    let p: TabAsk = parse_params(params)?;
+    let started = std::time::Instant::now();
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(p.timeout_ms.unwrap_or(1_800_000));
+    let (summary, handle) = live_tab(shared, session, p.tab.clone(), p.workspace.clone()).await?;
+    let tab_id = summary.id.clone();
+    let needs_you = || {
+        RpcError::new(
+            mapo_protocol::ErrorKind::NeedsYou,
+            format!("tab \"{}\" needs the user", summary.name),
+        )
+        .with_hint(format!("mapo tab focus {}", summary.name))
+    };
+    let timeout = || {
+        RpcError::new(
+            mapo_protocol::ErrorKind::Timeout,
+            "the ask didn't finish in time",
+        )
+    };
+    let snapshot = shared
+        .core
+        .call(methods::STATE_SNAPSHOT, json!({}), session.caller.clone())
+        .await?;
+    let mut sub = shared
+        .core
+        .subscribe(mapo_protocol::types::SubscribeParams {
+            after: snapshot["seq"].as_u64(),
+            types: None,
+        })
+        .await?;
+    // 1. Wait until the target is idle or done.
+    let mut state = summary.state;
+    while !matches!(state, State::Idle | State::Done) {
+        if state == State::NeedsYou {
+            return Err(needs_you());
+        }
+        let ev = tokio::time::timeout_at(deadline, sub.live.recv())
+            .await
+            .map_err(|_| timeout())?;
+        let Some(ev) = ev else { return Err(timeout()) };
+        let ev = ev?;
+        if ev.kind == "tab.updated" && ev.data["id"] == tab_id.as_str() {
+            state = serde_json::from_value(ev.data["state"].clone()).unwrap_or(state);
+        }
+    }
+    let _ = shared.core.take_last_message(&tab_id).await;
+    // 2. Paste and submit.
+    handle.send(&p.prompt, true, Some(true)).await?;
+    shared.core.agent_submit(&tab_id);
+    // 3. UserPromptSubmit within 10 s, then Stop; needs-you fails the ask.
+    let confirm_by = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut submitted = false;
+    loop {
+        let limit = if submitted {
+            deadline
+        } else {
+            confirm_by.min(deadline)
+        };
+        let ev = match tokio::time::timeout_at(limit, sub.live.recv()).await {
+            Ok(Some(ev)) => ev?,
+            Ok(None) => return Err(timeout()),
+            Err(_) if !submitted && limit == confirm_by => {
+                return Err(RpcError::unavailable(
+                    "the target didn't start the turn within 10 s (no UserPromptSubmit hook)",
+                )
+                .with_hint("is Claude running in that tab with Mapo's plugin?"));
+            }
+            Err(_) => return Err(timeout()),
+        };
+        if ev.data["tabId"] != tab_id.as_str() && ev.data["id"] != tab_id.as_str() {
+            continue;
+        }
+        match (
+            ev.kind.as_str(),
+            ev.data["event"].as_str(),
+            ev.data["state"].as_str(),
+        ) {
+            ("tab.hook", Some("UserPromptSubmit"), _) => submitted = true,
+            ("tab.updated", _, Some("needs-you")) if submitted => return Err(needs_you()),
+            ("tab.updated", _, Some("done")) if submitted => break,
+            _ => {}
+        }
+    }
+    let reply = shared
+        .core
+        .take_last_message(&tab_id)
+        .await
+        .unwrap_or_default();
+    Ok(json!({ "reply": reply, "turnMs": started.elapsed().as_millis() as u64 }))
+}
+
+/// `events.wait {after, timeoutMs}`: a long poll for MCP clients (PROTOCOL §6.1).
+async fn events_wait(shared: &Shared, params: &Value) -> Result<Value, RpcError> {
+    let p: mapo_protocol::types::EventsWait = parse_params(params)?;
+    let timeout = std::time::Duration::from_millis(p.timeout_ms.unwrap_or(30_000).min(600_000));
+    let mut sub = shared
+        .core
+        .subscribe(mapo_protocol::types::SubscribeParams {
+            after: Some(p.after),
+            types: p.types,
+        })
+        .await?;
+    let mut events = sub.replay;
+    if events.is_empty()
+        && let Ok(Some(first)) = tokio::time::timeout(timeout, sub.live.recv()).await
+    {
+        events.push(first?);
+        while let Ok(more) = sub.live.try_recv() {
+            events.push(more?);
+        }
+    }
+    let cursor = events.last().map_or(p.after, |e| e.seq);
+    Ok(json!({ "events": events, "cursor": cursor }))
 }
 
 fn to_value(v: &impl serde::Serialize) -> Result<Value, RpcError> {

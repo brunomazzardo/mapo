@@ -86,6 +86,21 @@ cols() { mapo tab run "$1" 'tput cols' | jq -r '.output | tonumber'; }
     mapo ui wait 'pane.terminal:terminal-2' --state focused --timeout-ms 3000 >/dev/null
 }
 
+# ⇧⌘T types the workspace's agent command; a harmless one, so no real Claude starts (PLAN §5 rules).
+'row:file.newAgentTab'() {
+    local ws before agent
+    ws=$(mapo rpc state.snapshot | jq -r '.activeWorkspaceId as $a | .workspaces[] | select(.id == $a) | .name')
+    mapo workspace configure "$ws" --agent-command 'echo fakeagent' >/dev/null
+    before=$(tabs | jq length)
+    mapo ui key $1 >/dev/null
+    poll length $((before + 1)) tabs
+    agent=$(tabs | jq -r '[.[] | select(.kind=="agent")] | last | .name')
+    mapo ui wait "pane.terminal:$agent" --state focused --timeout-ms 3000 >/dev/null
+    mapo tab wait "$agent" --until fakeagent --timeout-ms 8000 >/dev/null
+    mapo rpc tab.close "{\"tab\":\"$(tab_id $agent)\",\"force\":true}" >/dev/null
+    poll length $before tabs
+}
+
 'row:file.newTabInFolder'() {
     local folder="${DRIVE_TMP:A}/folder" before=$(tabs | jq length)
     mkdir -p "$folder"
@@ -215,6 +230,27 @@ FONT_COLS=0
     poll '[.[].name]' '["Workspace 1","Second"]' workspaces
 }
 
+# hook TAB FIXTURE [WORKSPACE]: feeds a hook fixture through `mapo hook` inside the tab (the synthetic
+# agent path). The leading space absorbs an Esc left by an interrupt in this plain shell.
+hook() {
+    mapo tab run ${3:+--workspace=$3} "$1" " mapo hook < $MAPO_ROOT/crates/mapo-agent/fixtures/$2.json" >/dev/null
+}
+
+# ⌘J is disabled with nothing to attend to, then focuses a tab that needs you in another workspace.
+'row:tab.nextNeedingYou'() {
+    later $1
+    mapo workspace new Attn >/dev/null
+    mapo tab new --workspace Attn --name nx >/dev/null
+    mapo tab wait --workspace Attn nx --until idle --timeout-ms 8000 >/dev/null
+    hook nx 02-UserPromptSubmit Attn
+    hook nx 03-PermissionRequest Attn
+    poll '.[] | select(.name=="nx") | .state' '"needs-you"' tabs
+    mapo ui key $1 >/dev/null
+    mapo ui wait 'pane.terminal:nx' --state focused --timeout-ms 3000 >/dev/null
+    mapo rpc workspace.delete "{\"workspace\":\"$(ws_id Attn)\",\"force\":true}" >/dev/null
+    poll '[.[].name]' '["Workspace 1","Second"]' workspaces
+}
+
 # A workspace of three tabs for the Tab rows.
 tabs_setup() {
     mapo workspace new Tabs >/dev/null
@@ -261,6 +297,16 @@ done
     mapo ui type 'cee' >/dev/null
     mapo ui key return >/dev/null
     poll '[.[] | select(.workspaceId == "'"$(ws_id Tabs)"'") | .name] | sort' '["a","b","cee"]' tabs
+}
+
+# ⇧⌘X sends Esc to the focused working agent, which the daemon records as an interrupt.
+# Tab b, because clicking the still-selected cee would start a rename; tab.close closes b next.
+'row:tab.interrupt'() {
+    focus_tab b
+    hook b 02-UserPromptSubmit
+    poll '.[] | select(.name=="b") | .state' '"running"' tabs
+    mapo ui key $1 >/dev/null
+    poll '.[] | select(.name=="b") | [.state, .agent.interrupted]' '["idle",true]' tabs
 }
 
 'row:tab.stop'() {

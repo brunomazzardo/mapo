@@ -71,6 +71,13 @@ pub enum Command {
     /// Drive the app like a person: tree, snapshot, click, type, keys, waits, metrics.
     #[command(subcommand)]
     Ui(ui::UiCommand),
+    /// The activity log: mutating requests from agents and the automation surface, newest first.
+    Activity {
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Print the mapo skill (the agent guide that ships in Mapo's Claude plugin).
+    Skill,
     /// Show, list, wait for, stop or clean instances.
     Instance(instance::InstanceArgs),
     /// Attach this terminal to a tab (what every terminal surface runs).
@@ -111,6 +118,20 @@ impl Cli {
             Command::Ui(cmd) => ui::run(self, cmd),
             Command::Explorer(cmd) => explorer::run(self, cmd),
             Command::File(cmd) => file::run(self, cmd),
+            Command::Activity { limit } => {
+                let params =
+                    limit.map_or(serde_json::json!({}), |l| serde_json::json!({ "limit": l }));
+                let result = self.connect()?.call("activity.list", params)?;
+                print_json(&result, self.json);
+                Ok(())
+            }
+            Command::Skill => {
+                print!(
+                    "{}",
+                    include_str!("../../../../plugin/skills/mapo/SKILL.md")
+                );
+                Ok(())
+            }
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
             Command::Hook => hook::run(self),

@@ -147,6 +147,11 @@ enum Msg {
     AgentTick {
         tab_id: String,
     },
+    Record(Box<mapo_protocol::types::Activity>),
+    TakeLastMessage {
+        tab_id: String,
+        reply: oneshot::Sender<Option<String>>,
+    },
     Resolve {
         tab: Option<String>,
         workspace: Option<String>,
@@ -196,6 +201,7 @@ impl CoreHandle {
                 | methods::WORKSPACE_MOVE
                 | methods::TAB_MOVE
                 | methods::HOOK_REPORT
+                | methods::ACTIVITY_LIST
                 | methods::TAB_INTERRUPT
                 | methods::WORKSPACE_CONFIGURE
         )
@@ -255,6 +261,23 @@ impl CoreHandle {
             })
             .ok()?;
         rx.await.ok().flatten()
+    }
+
+    /// The last Stop's assistant message, handed to a waiting `tab ask` and then forgotten.
+    pub async fn take_last_message(&self, tab_id: &str) -> Option<String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Msg::TakeLastMessage {
+                tab_id: tab_id.to_owned(),
+                reply,
+            })
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// Appends to the activity log (R-CTL-6): persisted, bounded and announced.
+    pub fn record_activity(&self, activity: mapo_protocol::types::Activity) {
+        let _ = self.tx.send(Msg::Record(Box::new(activity)));
     }
 
     /// A prompt was sent to an agent tab: optimistic Working, reverted after 6 s without
@@ -336,6 +359,7 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
         visibility: Visibility::default(),
         hook_tokens: Default::default(),
         attention: Default::default(),
+        activity: loaded.activity.into_iter().collect(),
     };
     if core
         .active
@@ -379,6 +403,8 @@ struct Core {
     hook_tokens: std::collections::HashMap<String, String>,
     /// Tabs counted by `attention.changed` last time: needs-you, failed and unviewed done.
     attention: std::collections::BTreeSet<String>,
+    /// The activity log, oldest first, at most 5,000 entries.
+    activity: std::collections::VecDeque<mapo_protocol::types::Activity>,
 }
 
 impl Core {
@@ -432,6 +458,20 @@ impl Core {
                     self.sync_agent(t);
                     self.state_changed(t, before);
                 }
+            }
+            Msg::TakeLastMessage { tab_id, reply } => {
+                let msg = self
+                    .tab_index(&tab_id)
+                    .and_then(|t| self.tabs[t].last_message.take());
+                let _ = reply.send(msg);
+            }
+            Msg::Record(activity) => {
+                self.ring.push("activity.recorded", json!(*activity));
+                self.pending.push(Write::Activity(activity.clone()));
+                if self.activity.len() == 5000 {
+                    self.activity.pop_front();
+                }
+                self.activity.push_back(*activity);
             }
             Msg::AgentTick { tab_id } => {
                 if let Some(t) = self.tab_index(&tab_id) {
@@ -567,6 +607,22 @@ impl Core {
                 to_value(&self.tab_summary(&self.tabs[t]))
             }
             methods::HOOK_REPORT => self.hook_report(params, caller),
+            methods::ACTIVITY_LIST => {
+                let p: mapo_protocol::types::ActivityList = parse_params(params)?;
+                let limit = p.limit.unwrap_or(100).min(5000);
+                let end = match &p.before {
+                    Some(id) => self
+                        .activity
+                        .iter()
+                        .position(|a| &a.id == id)
+                        .unwrap_or(self.activity.len()),
+                    None => self.activity.len(),
+                };
+                let start = end.saturating_sub(limit);
+                let page: Vec<&mapo_protocol::types::Activity> =
+                    self.activity.range(start..end).rev().collect();
+                to_value(&page)
+            }
             methods::TAB_INTERRUPT => {
                 // The daemon wrote ESC already; record it so late hooks can't flip the tab back.
                 let p: TabRef = parse_params(params)?;
@@ -1259,7 +1315,23 @@ impl Core {
         if persist {
             self.pending.push(Write::Tab(self.tabs[t].clone()));
         }
-        self.state_changed(t, before);
+        // Metadata only (no prompt or message text): lets `tab ask` see the turn start and end.
+        self.ring.push(
+            "tab.hook",
+            json!({ "tabId": self.tabs[t].id, "event": report.event }),
+        );
+        self.state_changed(t, before.clone());
+        // A hook re-reporting the same attention state is announced again, so the app can coalesce
+        // the repeat instead of treating it as new (UX §7.3).
+        let after = status(&self.tabs[t].facts);
+        if after.0 == before.0 && matches!(after.0, State::NeedsYou | State::Failed | State::Done) {
+            let (id, ws) = (self.tabs[t].id.clone(), self.tabs[t].workspace_id.clone());
+            self.ring.push(
+                "tab.state",
+                json!({ "tabId": id, "workspaceId": ws, "state": after.0, "previous": before.0,
+                        "stateLabel": after.1, "source": "hooks" }),
+            );
+        }
         let (state, _) = status(&self.tabs[t].facts);
         Ok(json!({ "accepted": true, "state": state }))
     }

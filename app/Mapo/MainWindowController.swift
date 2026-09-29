@@ -21,6 +21,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private var fontSize: Double
     /// Serves `explorer.*` (PROTOCOL §6.5).
     let inspector: InspectorViewController
+    /// The dock badge and notifications (PLAN T2.4).
+    private var attention: AttentionController?
+    /// The tabs in the shown panes, as last sent in `ui.visibility`.
+    private var visibleTabIds: Set<String> = []
 
     private static let titleItem = NSToolbarItem.Identifier("toolbar.title")
     private static let railToggleItem = NSToolbarItem.Identifier("rail.toggle")
@@ -99,6 +103,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
         window.setFrameAutosaveName(autosave)
         observeContinuously(self) { $0.updateTitle() }
+        attention = AttentionController(
+            client: client, canSee: { [weak self] tab in self?.canSee(tab) ?? false },
+            focusTab: { [weak self] id in self?.focusTab(id) })
+    }
+
+    /// Whether the person can see a tab: Mapo is active, the window is on screen and not occluded, and the tab
+    /// is in a shown pane of the active workspace (UX §7.3).
+    private func canSee(_ tab: TabSummary) -> Bool {
+        guard NSApp.isActive, let window, window.isVisible, !window.isMiniaturized,
+            window.occlusionState.contains(.visible)
+        else { return false }
+        return tab.workspaceId == client.store.activeWorkspaceId && visibleTabIds.contains(tab.id)
     }
 
     @available(*, unavailable)
@@ -125,6 +141,27 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         metrics.beginTabCreate()
         paneArea?.expectFocusChange()
         run("New Shell Tab") { try await $0.newShellTab() }
+    }
+
+    /// New Agent Tab (⇧⌘T): the workspace's agent command in a new shell, focused (PLAN T2.3).
+    func newAgentTab() {
+        metrics.beginTabCreate()
+        paneArea?.expectFocusChange()
+        run("New Agent Tab") { try await $0.newAgentTab() }
+    }
+
+    /// Interrupt Agent (⇧⌘X): Esc to the focused tab's working agent.
+    func interruptAgent() {
+        guard let tab = focusedTab, tab.isAgent, tab.state == .running else { return NSSound.beep() }
+        run(Method.tabInterrupt) { try await $0.tabCommand(Method.tabInterrupt, id: tab.id) }
+    }
+
+    /// Next Tab That Needs You (⌘J): the next attention tab after the focused one, wrapping (UX §7.4).
+    func focusNextAttentionTab() {
+        guard let tab = AttentionController.nextAttentionTab(client.store, after: focusedTab?.id) else {
+            return NSSound.beep()
+        }
+        focusTab(tab.id)
     }
 
     func restartDaemon() {
@@ -217,6 +254,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     /// `ui.visibility`; a failure only logs.
     private func reportVisibility(keyWindow: Bool, visibleTabIds: [String], focusedTabId: String?) {
+        self.visibleTabIds = Set(visibleTabIds)
         let client = client
         Task {
             do {
@@ -467,6 +505,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             return connected && focusedTab != nil
         case #selector(A.stopCommand(_:)):
             return connected && focusedTab?.state == .running
+        case #selector(A.interruptAgent(_:)):
+            return connected && focusedTab.map { $0.isAgent && $0.state == .running } ?? false
+        case #selector(A.nextTabNeedingYou(_:)):
+            return connected && !AttentionController.attentionOrder(store).isEmpty
         default:
             // Workspace, pane and New Tab in Folder commands need an active workspace.
             return connected && active != nil
@@ -485,7 +527,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             "palette": .bool(palette?.isOpen ?? false),
         ]
         let commands = CommandTable.checklist.map { JSONValue.object($0.mapValues(JSONValue.string)) }
-        return ["view": .object(view), "commands": .array(commands)]
+        return [
+            "view": .object(view), "commands": .array(commands),
+            "dockBadge": .number(Double(attention?.dockBadge ?? 0)),
+            "dockBadgeLabel": .string(NSApp.dockTile.badgeLabel ?? ""),
+        ]
     }
 
     // MARK: NSToolbarDelegate

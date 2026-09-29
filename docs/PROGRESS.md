@@ -4,6 +4,7 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## Needs the user
 
+- **Allow notifications for "Mapo Dev"** when macOS asks (bundle `dev.mapo.app.dev`), or in System Settings › Notifications. Until then drives see `reason=unauthorized`, and the attention log lines still work.
 - **Real-Claude drive steps for M2 weren't run tonight.** The account hit its usage limit at 02:04, so the coordinator ran only the synthetic hook path (fixtures through `mapo hook`). With usage to spare, run the M2 real-Claude steps from PLAN §5 (a harmless prompt in `$DRIVE_TMP`, trust, interrupt, resume with PAPAYA).
 - **Merging helper branches into `native` is blocked (decide how integration should work).** At 00:05 on 2026-09-29, the coordinator's auto-mode classifier refused to cherry-pick mapo-30's T0.3 commits (`native-daemon`: e8381971bde, 217a57820d7) onto `native` and run their drive, as "Untrusted Code Integration". Nobody retried it or worked around it, and no other session was asked to merge. Earlier, 29d43a8 (mapo-2b's SwiftTerm surface, from `native-surface` 7f190378bee) had already been cherry-picked, built and unit-tested on `native` before the refusal. It is kept; revert it with `git revert 29d43a8` if you prefer. The helpers keep committing on their own branches (`native-daemon`, `native-termcore`, `native-app`, `native-surface`) without cross-merging. To continue, review and merge them yourself (`git merge --ff-only` or `git cherry-pick` in ~/code/mapo-native), or allow the coordinator to integrate helper commits.
 - **Allow acquiring GhosttyKit** (the prebuilt libghostty-spm pin from PLAN T0.8, or a Zig 0.16 source build) so T0.8 can move from SwiftTerm to Ghostty (D-13; goal: terminal quality). On 2026-09-28 at 23:40 the coordinator's auto-mode permission classifier refused the prebuilt download as "Untrusted Code Integration". Tonight's run uses the SwiftTerm fallback behind `TerminalSurface`, and nobody retried the download or worked around the refusal.
@@ -38,6 +39,23 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **T2.4 done** (app side by a subagent).
+  - **What's in it:**
+    - dock badge (needs-you count, "99+")
+    - `rail.workspace.badge:<ws>` as an AX element
+    - notifications per UX §7.3, with identifier `<instance>/<tabId>`, lazy authorization, the `notification:<tabId> … reason=` log line, and click-to-focus
+    - ⌘J to the next attention tab
+    - ⇧⌘T for agent tabs; ⇧⌘X and the agent pane's Stop interrupt
+    - `dockBadge` in the snapshot model
+  - The daemon re-announces `tab.state` (`previous == state`) when a hook repeats an attention state, so the app logs `coalesced`.
+  - Drive `task-t2-4` PASS 23/23, evidence `evidence/task-t2-4/20260929-033443`. The keymap drive now covers ⇧⌘T, ⌘J and ⇧⌘X (74/74).
+  - Notification permission for `dev.mapo.app.dev` was never granted, so the first line logs `reason=unauthorized` (see Needs the user).
+- **M3 control-plane pieces done** (coordinator):
+  - **T3.2:** migration 0003, an activity log bounded to 5,000 rows, `activity.list`, `mapo activity` and `activity.recorded`. Every mutating request from an agent tab or `ui.*` is recorded with outcome ok, error or rejected. Checked: from tab A, `mapo tab close B` is rejected (exit 1, "must pass --force"), `--force` closes it, and both appear in the log with caller `tab`.
+  - **T3.3:** `tab.ask` and `mapo tab ask`. It waits for idle or done, pastes the prompt, confirms UserPromptSubmit within 10 s, waits for done and returns the Stop's `last_assistant_message`. The message is held only until the ask takes it, and new `tab.hook` events carry metadata only. Synthetic check: the reply "OK" exits 0; a permission request mid-turn exits 5 with `needs_you`.
+  - **T3.4:** `events.wait` long poll, which returned `{events: []}` after 526 ms for a 500 ms timeout.
+  - **T3.6:** the ported skill in `plugin/skills/mapo/SKILL.md`, printed by `mapo skill` byte for byte.
+  - Not done: T3.1 (a full verb parity walk), T3.5 (`mapo mcp` on rmcp) and T3.7 (the M3 gate).
 - **M2 daemon side: T2.1, T2.2, T2.3 and T2.5 done, synthetic path.**
   - **Plugin:** `plugin/` has the manifest, `hooks.json` for the ten R-AG-3 events, `.mcp.json` and a stub skill. It's embedded in the bundle as `Resources/claude-plugin`, and every tab gets `CLAUDE_CODE_PLUGIN_DIRS`, appended to any existing value.
   - **`mapo hook`:** reads up to 1 MiB, keeps only `hook.report`'s fields, logs only to `hook.<date>.log`, and always exits 0 within 2 s.

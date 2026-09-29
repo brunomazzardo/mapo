@@ -13,6 +13,7 @@ use crate::status::Facts;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_agent_sessions.sql"),
+    include_str!("../migrations/0003_activity.sql"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +33,8 @@ pub enum Write {
     Tab(Tab),
     DeleteTab(String),
     Meta(String, String),
+    /// Appends one activity entry and trims the log to its newest 5,000 rows.
+    Activity(Box<mapo_protocol::types::Activity>),
     /// Resolves once everything before it is committed.
     Flush(std::sync::mpsc::Sender<()>),
 }
@@ -42,6 +45,8 @@ pub struct Loaded {
     pub workspaces: Vec<Workspace>,
     pub tabs: Vec<Tab>,
     pub active_workspace: Option<String>,
+    /// Newest last.
+    pub activity: Vec<mapo_protocol::types::Activity>,
 }
 
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
@@ -147,6 +152,15 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
     for row in rows {
         out.tabs.push(row?);
     }
+    {
+        let mut stmt = conn.prepare("SELECT json FROM activity ORDER BY at, id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        for row in rows {
+            if let Ok(a) = serde_json::from_str(&row?) {
+                out.activity.push(a);
+            }
+        }
+    }
     out.active_workspace = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'active_workspace'",
@@ -204,6 +218,16 @@ fn apply(conn: &Connection, w: &Write) -> Result<(), StoreError> {
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
                 params![k, v],
+            )?;
+        }
+        Write::Activity(a) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO activity (id, at, json) VALUES (?1, ?2, ?3)",
+                params![a.id, a.at as i64, serde_json::to_string(&**a)?],
+            )?;
+            conn.execute(
+                "DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY at DESC, id DESC LIMIT 5000)",
+                [],
             )?;
         }
         Write::Flush(_) => {}

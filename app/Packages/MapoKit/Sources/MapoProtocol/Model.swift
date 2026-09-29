@@ -14,6 +14,7 @@ public enum Method {
     public static let workspaceActivate = "workspace.activate"
     public static let tabCreate = "tab.create"
     public static let tabFocus = "tab.focus"
+    public static let tabInterrupt = "tab.interrupt"
     public static let appRegister = "app.register"
     /// The notification that carries an `Event`.
     public static let event = "event"
@@ -144,6 +145,8 @@ public struct TabLaunch: Codable, Hashable, Sendable {
 public struct TabAgentInfo: Codable, Hashable, Sendable {
     public var hooksConnected: Bool
     public var sessionId: String?
+    /// Set by `tab.interrupt` until the next prompt (PLAN T2.3).
+    public var interrupted: Bool?
 }
 
 public struct TabServerInfo: Codable, Hashable, Sendable {

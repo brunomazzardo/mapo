@@ -212,7 +212,7 @@ public enum CommandTable {
             method: "tab.create"),
         Command(
             "file.newAgentTab", .file, "New Agent Tab", #selector(A.newAgentTab(_:)), Shortcut("t", [.cmd, .shift]),
-            method: "tab.create", milestone: "M2"),
+            method: "tab.create"),
         Command(
             "file.newTabInFolder", .file, "New Tab in Folder…", #selector(A.newTabInFolder(_:)),
             Shortcut("t", [.cmd, .alt]), method: "tab.create"),
@@ -300,7 +300,7 @@ public enum CommandTable {
         [
             Command(
                 "tab.nextNeedingYou", .tab, "Next Tab That Needs You", #selector(A.nextTabNeedingYou(_:)),
-                Shortcut("j"), method: "tab.focus", milestone: "M2"),
+                Shortcut("j"), method: "tab.focus"),
             Command(
                 "tab.previous", .tab, "Previous Tab", #selector(A.previousTab(_:)), Shortcut("[", [.cmd, .shift]),
                 method: "tab.focus", startsGroup: true),
@@ -319,7 +319,7 @@ public enum CommandTable {
                 method: "tab.rename", startsGroup: true),
             Command(
                 "tab.interrupt", .tab, "Interrupt Agent", #selector(A.interruptAgent(_:)),
-                Shortcut("x", [.cmd, .shift]), method: "tab.interrupt", milestone: "M2", startsGroup: true),
+                Shortcut("x", [.cmd, .shift]), method: "tab.interrupt", startsGroup: true),
             Command("tab.stop", .tab, "Stop Command", #selector(A.stopCommand(_:)), Shortcut("."), method: "tab.stop"),
             Command(
                 "tab.close", .tab, "Close Tab", #selector(A.closeTab(_:)), Shortcut("w", [.cmd, .shift]),

@@ -335,6 +335,13 @@ extension MapoClient {
             Method.tabCreate, TabCreateParams(kind: "shell", placement: "focused", focus: true), as: TabSummary.self)
     }
 
+    /// New Agent Tab (⇧⌘T): the daemon types the agent command into a shell in the same folder as ⌘T
+    /// (PLAN T2.3).
+    public func newAgentTab() async throws {
+        _ = try await call(
+            Method.tabCreate, TabCreateParams(kind: "agent", placement: "focused", focus: true), as: TabSummary.self)
+    }
+
     public func activateWorkspace(id: String) async throws {
         _ = try await call(Method.workspaceActivate, WorkspaceSelector(workspace: id), as: WorkspaceSummary.self)
     }

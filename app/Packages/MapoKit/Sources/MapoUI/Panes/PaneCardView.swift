@@ -266,7 +266,7 @@ final class PaneHeaderView: NSView {
 
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
-    private let state = NSTextField(labelWithString: "")
+    private let state = StateLabel(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private let meta = NSTextField(labelWithString: "")
     private let branchIcon = NSImageView()
@@ -382,8 +382,10 @@ final class PaneHeaderView: NSView {
                 systemSymbolName: tab.isAgent ? "sparkle" : "terminal", accessibilityDescription: nil)
             title.stringValue = tab.title.isEmpty ? tab.name : tab.title
             let (word, color, extra) = Self.stateWord(tab)
+            state.isPill = tab.state == .needsYou
+            state.font = state.isPill ? .systemFont(ofSize: 11, weight: .bold) : .systemFont(ofSize: 12)
             state.stringValue = word
-            state.textColor = color
+            state.textColor = state.isPill ? Tokens.onNeedsFill : color
             state.isHidden = word.isEmpty
             detail.stringValue = extra ?? ""
             detail.isHidden = extra == nil
@@ -391,7 +393,9 @@ final class PaneHeaderView: NSView {
             meta.stringValue = [folder, model.branch].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
             meta.toolTip = (tab.cwd as NSString).abbreviatingWithTildeInPath
             branchIcon.isHidden = model.branch == nil
+            // On a working agent Stop interrupts it; on a command it sends Ctrl-C (UX §4.1).
             stop.isHidden = tab.state != .running
+            stop.toolTip = tab.isAgent ? "Interrupt Agent (⇧⌘X)" : "Stop Command (⌘.)"
             stop.setAXIdentifier(AXID.paneStop(tab.name))
             stop.setAccessibilityLabel("Stop \(tab.name)")
             setAccessibilityLabel("\(tab.name) header")
@@ -485,7 +489,7 @@ final class PaneHeaderView: NSView {
     /// The state word of UX §4.1: nothing when idle.
     private static func stateWord(_ tab: TabSummary) -> (String, NSColor, String?) {
         switch tab.state {
-        case .running: ("Running", Tokens.running, nil)
+        case .running: (tab.isAgent ? "Working" : "Running", Tokens.running, nil)
         case .done: ("Done", Tokens.done, nil)
         case .failed: ("Failed", Tokens.failed, tab.stateDetail ?? tab.lastExit.map { "exit \($0.code)" })
         case .needsYou: ("Needs you", Tokens.needs, nil)
@@ -601,6 +605,38 @@ private final class EmptyPaneView: NSView {
 }
 
 // MARK: - Exit bar
+
+/// The header's state word. `isPill` draws the filled "Needs you" pill: `needs.fill`, radius 9, padding
+/// 2 8 (UX §4.1).
+final class StateLabel: NSTextField {
+    var isPill = false {
+        didSet {
+            guard isPill != oldValue else { return }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        if isPill {
+            size.width += 16
+            size.height += 4
+        }
+        return size
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isPill else { return super.draw(dirtyRect) }
+        Tokens.needsFill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        let text = NSAttributedString(
+            string: stringValue,
+            attributes: [.font: font ?? .systemFont(ofSize: 11, weight: .bold), .foregroundColor: Tokens.onNeedsFill])
+        let size = text.size()
+        text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
+    }
+}
 
 /// The bar at the bottom of a stopped shell's pane (UX §4.3): "The shell exited with code {n}." with
 /// [Restart] (`pane.restart:<tabName>`) and [Close Tab] (`pane.closeTab:<tabName>`).

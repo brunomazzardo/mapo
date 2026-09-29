@@ -122,8 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func openSettings(_ sender: Any?) { windowController?.openSettings() }
     @objc func newWorkspace(_ sender: Any?) { windowController?.newWorkspace() }
     @objc func newShellTab(_ sender: Any?) { windowController?.newShellTab() }
-    /// M2; the item stays disabled.
-    @objc func newAgentTab(_ sender: Any?) { NSSound.beep() }
+    @objc func newAgentTab(_ sender: Any?) { windowController?.newAgentTab() }
     @objc func newTabInFolder(_ sender: Any?) { windowController?.newTabInFolder() }
     @objc func showFiles(_ sender: Any?) { windowController?.showInspector(.files) }
     @objc func showChanges(_ sender: Any?) { windowController?.showInspector(.changes) }
@@ -139,14 +138,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func moveWorkspaceUp(_ sender: Any?) { windowController?.moveActiveWorkspace(by: -1) }
     @objc func moveWorkspaceDown(_ sender: Any?) { windowController?.moveActiveWorkspace(by: 1) }
     @objc func deleteWorkspace(_ sender: Any?) { windowController?.deleteActiveWorkspace() }
-    /// M2; the item stays disabled.
-    @objc func nextTabNeedingYou(_ sender: Any?) { NSSound.beep() }
+    @objc func nextTabNeedingYou(_ sender: Any?) { windowController?.focusNextAttentionTab() }
     @objc func previousTab(_ sender: Any?) { windowController?.switchTab(by: -1) }
     @objc func nextTab(_ sender: Any?) { windowController?.switchTab(by: 1) }
     @objc func goToTab(_ sender: Any?) { windowController?.goToTab((sender as? NSMenuItem)?.tag ?? 0) }
     @objc func renameTab(_ sender: Any?) { windowController?.renameFocusedTab() }
-    /// M2; the item stays disabled.
-    @objc func interruptAgent(_ sender: Any?) { NSSound.beep() }
+    @objc func interruptAgent(_ sender: Any?) { windowController?.interruptAgent() }
     @objc func stopCommand(_ sender: Any?) { windowController?.stopCommand() }
     @objc func closeTab(_ sender: Any?) { windowController?.closeFocusedTab() }
     @objc func splitRight(_ sender: Any?) { windowController?.splitPane("right") }

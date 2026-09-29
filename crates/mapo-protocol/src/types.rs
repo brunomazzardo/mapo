@@ -83,6 +83,65 @@ pub struct TabSummary {
     pub agent: Option<AgentInfo>,
 }
 
+/// One activity-log entry (PROTOCOL §7 `Activity`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub id: String,
+    /// Milliseconds since the Unix epoch.
+    pub at: u64,
+    pub caller: ActivityCaller,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// `ok`, `error` or `rejected`.
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityCaller {
+    /// `app` (the operator or automation) or `tab`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActivityList {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub before: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EventsWait {
+    pub after: u64,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TabAsk {
+    #[serde(default)]
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<String>,
+    pub prompt: String,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
 /// Agent facts on a tab (PROTOCOL §7 `TabSummary.agent`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -9,8 +9,9 @@ source "${0:A:h}/lib.sh"
 drive_begin task-t2-4
 F="$MAPO_ROOT/crates/mapo-agent/fixtures"
 LOGDIR=$("$MAPO_BIN" --instance "$DRIVE_INSTANCE" instance show --json | jq -r .logDir)
-# Tab ag lives in Back; the CLI resolves names in the active workspace unless told.
-hook() { mapo tab run --workspace Back "$1" "mapo hook < $F/$2.json" >/dev/null; }
+# Tab ag lives in Back; the CLI resolves names in the active workspace unless told. The leading space
+# absorbs the Esc an interrupt leaves in this plain shell, which would otherwise eat the next character.
+hook() { mapo tab run --workspace Back "$1" " mapo hook < $F/$2.json" >/dev/null; }
 tabs() { mapo rpc state.snapshot | jq .tabs; }
 tab_id() { tabs | jq -r --arg n "$1" '.[] | select(.name==$n) | .id'; }
 state() { tabs | jq -c --arg n "$1" '.[] | select(.name==$n) | .state'; }
@@ -86,7 +87,13 @@ hook ag 04-PostToolBatch
 poll . '"running"' state ag
 hook ag 03-PermissionRequest
 poll . '"needs-you"' state ag
-wait_reasons $AG 3 | expect_json '.[2]' '"visible"'
+# Only a window a person can see counts (UX §7.3): when other windows cover it, it notifies instead.
+if [[ $(mapo ui window | jq .occluded) == false ]]; then
+    wait_reasons $AG 3 | expect_json '.[2]' '"visible"'
+else
+    print "   note: the window is occluded on this screen, so the tab can't be seen"
+    wait_reasons $AG 3 | expect_json '.[2] | IN("posted", "unauthorized")' true
+fi
 
 step "Stop on a working agent's pane interrupts it (pane.stop:ag)"
 hook ag 04-PostToolBatch

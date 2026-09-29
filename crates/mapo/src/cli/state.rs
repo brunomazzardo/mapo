@@ -94,6 +94,12 @@ pub enum TabCommand {
         #[arg(long)]
         index: usize,
     },
+    /// Ask a Claude tab: wait until it's free, send PROMPT, wait for its turn to end, print the reply.
+    Ask {
+        name: String,
+        #[arg(required = true, num_args = 1..)]
+        prompt: Vec<String>,
+    },
     /// Interrupt an agent (Escape); late hook events are ignored until the next prompt.
     Interrupt { name: String },
     /// Stop the running command (Ctrl-C).
@@ -237,6 +243,19 @@ pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
             print(cli, &result, TAB_COLS);
             return Ok(());
         }
+        TabCommand::Ask { name, prompt } => {
+            let mut params = json!({ "tab": name, "prompt": prompt.join(" ") });
+            if let Some(ms) = cli.timeout_ms {
+                params["timeoutMs"] = json!(ms);
+            }
+            let result = call(cli, "tab.ask", with_ws(cli, params))?;
+            if wants_json(cli.json) {
+                println!("{result}");
+            } else {
+                println!("{}", result["reply"].as_str().unwrap_or_default());
+            }
+            return Ok(());
+        }
         TabCommand::Run {
             name,
             command,
@@ -293,7 +312,8 @@ pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
         TabCommand::Send { .. }
         | TabCommand::Read { .. }
         | TabCommand::Wait { .. }
-        | TabCommand::Run { .. } => {
+        | TabCommand::Run { .. }
+        | TabCommand::Ask { .. } => {
             return Ok(());
         }
     };

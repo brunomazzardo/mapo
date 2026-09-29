@@ -169,7 +169,10 @@ final class RailCellView: NSTableCellView {
             name.font = .systemFont(ofSize: 12.5)
             name.textColor = Self.nameColor(tint: row.tint, selected: selected)
         }
-        accessory.configure(row.accessory, selected: row.isSelected)
+        let isWorkspace = if case .workspace = row.kind { true } else { false }
+        accessory.configure(
+            row.accessory, selected: row.isSelected,
+            badgeIdentifier: isWorkspace ? AXID.railWorkspaceBadge(row.text) : nil)
         configureHint(row.hint, selected: row.isSelected)
         needsLayout = true
     }
@@ -282,7 +285,19 @@ final class RailAccessoryView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(_ accessory: RailAccessory, selected: Bool) {
+    /// `badgeIdentifier` is `rail.workspace.badge:<workspaceName>` on workspace rows: while the badge shows,
+    /// the accessory is a static text element with that identifier and the count as its value (UX §3.1).
+    func configure(_ accessory: RailAccessory, selected: Bool, badgeIdentifier: String? = nil) {
+        if case .badge(let count) = accessory, let badgeIdentifier {
+            setAccessibilityElement(true)
+            setAccessibilityRole(.staticText)
+            setAccessibilityIdentifier(badgeIdentifier)
+            setAccessibilityValue(String(count))
+            setAccessibilityLabel(count == 1 ? "1 needs you" : "\(count) need you")
+        } else {
+            setAccessibilityElement(false)
+            setAccessibilityIdentifier(nil)
+        }
         guard accessory != self.accessory || selected != self.selected else { return }
         self.accessory = accessory
         self.selected = selected

@@ -242,7 +242,9 @@ public final class PaneAreaViewController: NSViewController {
                     self?.actions.perform("New Tab") { try await $0.newTab(inPane: id, kind: kind) }
                 },
                 stopTab: { [weak self] id in
-                    self?.actions.perform("tab.stop") { try await $0.tabCommand("tab.stop", id: id) }
+                    // An agent's Stop interrupts it (Esc); a command's sends Ctrl-C (UX §4.1).
+                    let method = self?.store.tabs[id]?.isAgent == true ? Method.tabInterrupt : "tab.stop"
+                    self?.actions.perform(method) { try await $0.tabCommand(method, id: id) }
                 },
                 restartTab: { [weak self] id in
                     guard let self else { return }

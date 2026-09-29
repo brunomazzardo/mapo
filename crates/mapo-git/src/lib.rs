@@ -2,6 +2,7 @@
 //! a git status cache per repository root, and debounced file watching.
 
 pub mod branch;
+pub mod changes;
 pub mod fs;
 pub mod status;
 pub mod watch;

@@ -18,3 +18,4 @@ rustix.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+mapo-proc.workspace = true

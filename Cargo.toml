@@ -23,6 +23,8 @@ mapo-core = { path = "crates/mapo-core" }
 mapo-term = { path = "crates/mapo-term" }
 mapo-git = { path = "crates/mapo-git" }
 mapo-agent = { path = "crates/mapo-agent" }
+mapo-proc = { path = "crates/mapo-proc" }
+mapo-mcp = { path = "crates/mapo-mcp" }
 
 tokio = { version = "1.53", features = ["rt-multi-thread", "rt", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "process", "fs"] }
 serde = { version = "1", features = ["derive"] }
@@ -45,7 +47,14 @@ typeshare = "1.0.2"
 ignore = "0.4.33"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+rmcp = { version = "=3.5.0", default-features = false, features = ["server"] }
 
+# Cargo's release default strips debuginfo, and this machine's strip (Xcode 27) leaves proc-macro
+# dylibs the loader rejects ("mis-aligned LINKEDIT string pool"). Keep symbols; LTO stays thin.
 [profile.release]
 lto = "thin"
 codegen-units = 4
+strip = "none"
+
+[profile.release.build-override]
+strip = "none"

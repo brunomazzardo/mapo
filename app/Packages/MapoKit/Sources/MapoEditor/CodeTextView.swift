@@ -173,6 +173,10 @@ final class LineNumberGutter: NSView {
     }
     /// The gap between the gutter and the text (the text container's left inset).
     var textInset: CGFloat = 8
+    /// Git hunks against HEAD (R-ED-3), drawn in the 3 pt leading strip.
+    var marks = GitGutterMarks() {
+        didSet { if marks != oldValue { needsDisplay = true } }
+    }
 
     override var isFlipped: Bool { true }
 
@@ -200,11 +204,30 @@ final class LineNumberGutter: NSView {
         let length = (textView.string as NSString).length
 
         func drawNumber(_ line: Int, lineTop: CGFloat, lineHeight: CGFloat) {
+            let top = lineTop + originY - visible.minY
+            if let kind = marks.lines[line] {
+                (kind == .added ? theme.gitAdded : theme.gitModified).setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: top, width: 3, height: lineHeight), xRadius: 1, yRadius: 1)
+                    .fill()
+            }
+            if marks.deletions.contains(line) { drawDeletion(atY: top) }
+            if line == lines.count - 1, marks.deletions.contains(lines.count) { drawDeletion(atY: top + lineHeight) }
             let text = String(line + 1) as NSString
             let attributes = line == caretLine ? current : normal
             let size = text.size(withAttributes: attributes)
             let y = lineTop + originY - visible.minY + (lineHeight - size.height) / 2
             text.draw(at: NSPoint(x: rightEdge - size.width, y: y), withAttributes: attributes)
+        }
+
+        /// A 3×6 wedge centered on a line boundary.
+        func drawDeletion(atY y: CGFloat) {
+            theme.gitDeleted.setFill()
+            let wedge = NSBezierPath()
+            wedge.move(to: NSPoint(x: 0, y: y - 3))
+            wedge.line(to: NSPoint(x: 3, y: y))
+            wedge.line(to: NSPoint(x: 0, y: y + 3))
+            wedge.close()
+            wedge.fill()
         }
 
         let start =

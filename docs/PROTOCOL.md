@@ -156,9 +156,10 @@ The milestone is where each method first ships ([PLAN.md](PLAN.md)). "→" means
 | `fs.list` | `{path}` → `{path, state:"ready"\|"empty"\|"missing"\|"unreadable", hiddenByExclude:number, repo?:{root, branch?}, entries:[{name, kind:"file"\|"dir"\|"symlink", git?:"M"\|"A"\|"D"\|"R"\|"?"\|"U", ignored?:bool}]}`. `kind` follows a symlink's target; `symlink` means a broken link. `hiddenByExclude` counts `[files] exclude` matches only. | M1 |
 | `fs.watch` / `fs.unwatch` | `{path}` → `{}`. Connection-scoped and non-recursive: one folder's entries plus the repository's `HEAD`, `index` and refs. Emits `fs.changed {root, paths}` (entry names; empty when the folder itself changed) and `git.changed {root}`. | M1 |
 | `explorer.refresh` / `explorer.collapse` | `{}` → `{path, state}` (routed to the app) | M1 |
-| `git.status` | `{path}` → `{root, branch, upstream?, ahead, behind, files:[{path, status, added, deleted}], totals:{files, added, deleted}, warn?:string}` | M4 |
-| `git.diff` | `{root, path}` → `{text}` | M4 |
-| `git.baseText` | `{path}` → `{text, rev}`; `not_found` when untracked | M4 |
+| `git.status` | `{path}` → `{root, branch, head?, upstream?, ahead, behind, files:[{path, status, added, deleted, binary?:true}], totals:{files, added, deleted}, warn?:string}`. `path` is any folder or file in the repository; `not_found` outside one. `branch` is null when detached, and `head` is HEAD's short id (absent before the first commit). `files` is one list sorted by path, with staged, unstaged and untracked files together; `status` uses the `fs.list` letters, and an untracked file counts its lines as added. `warn` appears above `[changes] warn-lines` (1,500) or `warn-files` (50). | M4 |
+| `git.diff` | `{root, path}` → `{text}`: `git diff -U3` of one file against HEAD (staged and unstaged); an untracked file diffs against nothing. `path` is absolute or relative to `root`. | M4 |
+| `git.baseText` | `{path, root?}` → `{text, rev}`; `not_found` when HEAD doesn't have the file (untracked, added, no commit) or outside a repository | M4 |
+| `diff.open` | `{root, path, workspace?}` → `{path, paneId}`. Shows `path`'s diff (`{diff:{root, path}}`, both absolute) in the workspace's file pane, placed like `file.open`, and leaves focus where it is (UX §5.3). | M4 |
 
 ### 6.6 Processes
 

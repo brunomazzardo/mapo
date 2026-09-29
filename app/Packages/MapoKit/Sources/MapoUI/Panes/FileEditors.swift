@@ -26,7 +26,7 @@ public enum FileEditors {
                 .keyword: Tokens.syntaxKeyword, .string: Tokens.syntaxString, .function: Tokens.syntaxFunction,
                 .type: Tokens.syntaxType, .number: Tokens.syntaxNumber, .punctuation: Tokens.syntaxPunctuation,
                 .comment: Tokens.syntaxComment,
-            ])
+            ], gitAdded: Tokens.done, gitModified: Tokens.running, gitDeleted: Tokens.failed)
     }
 
     // MARK: Focus

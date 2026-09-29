@@ -4,6 +4,7 @@ mod attach;
 mod debug;
 mod explorer;
 mod file;
+mod git;
 mod hook;
 mod instance;
 mod pane;
@@ -11,7 +12,7 @@ mod state;
 mod ui;
 
 use clap::{Parser, Subcommand};
-use mapo_protocol::hello::Role;
+use mapo_protocol::hello::{Credential, CredentialKind, Role};
 
 use crate::client::Client;
 use crate::output::{CliError, from_instance, print_json};
@@ -65,6 +66,9 @@ pub enum Command {
     /// Open a file in the workspace's file pane.
     #[command(subcommand)]
     File(file::FileCommand),
+    /// The files changed against HEAD, as the Changes inspector shows them.
+    #[command(subcommand)]
+    Git(git::GitCommand),
     /// Refresh or collapse the app's Files inspector.
     #[command(subcommand)]
     Explorer(explorer::ExplorerCommand),
@@ -76,6 +80,14 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Your TCP listeners and the tabs that own them.
+    Ports {
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Stop a listed process (SIGTERM), re-checking its identity first.
+    #[command(subcommand)]
+    Process(ProcessCommand),
     /// Print the mapo skill (the agent guide that ships in Mapo's Claude plugin).
     Skill,
     /// Show, list, wait for, stop or clean instances.
@@ -85,6 +97,8 @@ pub enum Command {
     /// Report a Claude hook event (run by Mapo's Claude plugin; reads hook JSON on stdin).
     #[command(hide = true)]
     Hook,
+    /// Serve MCP on stdio for the agent in this tab (needs the tab's MAPO_TOKEN).
+    Mcp,
     /// Run the daemon for this instance (detached unless --foreground).
     Daemon {
         /// Stay in the foreground and log to stderr too.
@@ -103,6 +117,18 @@ pub enum Command {
     },
 }
 
+#[derive(Subcommand)]
+pub enum ProcessCommand {
+    /// Send SIGTERM to PID if it is still the process `mapo ports` listed.
+    Stop {
+        pid: u32,
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 impl Cli {
     pub fn run(&self) -> Result<(), CliError> {
         match &self.command {
@@ -118,10 +144,29 @@ impl Cli {
             Command::Ui(cmd) => ui::run(self, cmd),
             Command::Explorer(cmd) => explorer::run(self, cmd),
             Command::File(cmd) => file::run(self, cmd),
+            Command::Git(cmd) => git::run(self, cmd),
             Command::Activity { limit } => {
                 let params =
                     limit.map_or(serde_json::json!({}), |l| serde_json::json!({ "limit": l }));
                 let result = self.connect()?.call("activity.list", params)?;
+                print_json(&result, self.json);
+                Ok(())
+            }
+            Command::Ports { port } => {
+                let params =
+                    port.map_or(serde_json::json!({}), |p| serde_json::json!({ "port": p }));
+                let result = self.connect()?.call("proc.ports", params)?;
+                print_json(&result, self.json);
+                Ok(())
+            }
+            Command::Process(ProcessCommand::Stop {
+                pid,
+                identity,
+                force,
+            }) => {
+                let params =
+                    serde_json::json!({ "pid": pid, "identity": identity, "force": force });
+                let result = self.connect()?.call("proc.stop", params)?;
                 print_json(&result, self.json);
                 Ok(())
             }
@@ -135,6 +180,7 @@ impl Cli {
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
             Command::Hook => hook::run(self),
+            Command::Mcp => self.mcp(),
             Command::Daemon { foreground } => {
                 crate::daemon::run(&self.resolve_instance()?, *foreground)
             }
@@ -158,11 +204,57 @@ impl Cli {
         mapo_instance::resolve_current(self.instance.as_deref()).map_err(from_instance)
     }
 
+    /// `mapo mcp`: the tab credential only, never the app token (PROTOCOL §10).
+    fn mcp(&self) -> Result<(), CliError> {
+        let token = std::env::var("MAPO_TOKEN").unwrap_or_default();
+        if token.is_empty() {
+            return Err(CliError::forbidden(
+                "mapo mcp needs MAPO_TOKEN: run it from a Mapo tab (Mapo's Claude plugin starts it there)",
+            ));
+        }
+        let instance = self.resolve_instance()?;
+        if std::env::var("MAPO_INSTANCE").is_ok_and(|env| env != instance.name) {
+            return Err(CliError::forbidden(format!(
+                "MAPO_TOKEN belongs to instance {}, not {}",
+                std::env::var("MAPO_INSTANCE").unwrap_or_default(),
+                instance.name
+            )));
+        }
+        let caller = McpCaller {
+            instance,
+            credential: Credential {
+                kind: CredentialKind::Tab,
+                token,
+            },
+        };
+        // Fail fast on a dead daemon or a revoked token instead of on the first tool call.
+        mapo_mcp::Caller::call(&caller, "ping", serde_json::json!({}))?;
+        mapo_mcp::serve(std::sync::Arc::new(caller))
+            .map_err(|e| CliError::internal(format!("mapo mcp: {e}")))
+    }
+
     /// Connects to this instance's daemon as a CLI client.
     pub fn connect(&self) -> Result<Client, CliError> {
         let timeout = self
             .timeout_ms
             .map(|ms| std::time::Duration::from_millis(ms + 1000));
         Client::connect(&self.resolve_instance()?, Role::Cli, timeout)
+    }
+}
+
+/// One tab-credential connection per MCP tool call, so a long wait never blocks another call.
+struct McpCaller {
+    instance: mapo_instance::Instance,
+    credential: Credential,
+}
+
+impl mapo_mcp::Caller for McpCaller {
+    fn call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, mapo_protocol::RpcError> {
+        Client::connect_with(&self.instance, Role::Mcp, self.credential.clone(), None)?
+            .call(method, params)
     }
 }

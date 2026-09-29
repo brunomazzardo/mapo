@@ -16,15 +16,23 @@ public struct EditorTheme {
     /// The checkerboard behind image previews.
     public var checker: NSColor
     public var syntax: [SyntaxKind: NSColor]
+    /// Git gutter bars (UX §6.1): added lines, modified lines and the deletion wedge.
+    public var gitAdded: NSColor = .systemGreen
+    public var gitModified: NSColor = .systemBlue
+    public var gitDeleted: NSColor = .systemRed
     public var font: NSFont
     public var lineHeight: CGFloat
 
     public init(
         background: NSColor, text: NSColor, lineNumber: NSColor, currentLineNumber: NSColor, selection: NSColor,
         currentLine: NSColor, barFill: NSColor, barText: NSColor, divider: NSColor, checker: NSColor,
-        syntax: [SyntaxKind: NSColor],
+        syntax: [SyntaxKind: NSColor], gitAdded: NSColor = .systemGreen, gitModified: NSColor = .systemBlue,
+        gitDeleted: NSColor = .systemRed,
         font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular), lineHeight: CGFloat = 20
     ) {
+        self.gitAdded = gitAdded
+        self.gitModified = gitModified
+        self.gitDeleted = gitDeleted
         self.background = background
         self.text = text
         self.lineNumber = lineNumber
@@ -88,6 +96,12 @@ public enum EditorAXID {
     public static func close(_ path: String) -> String { "editor.close:\(path)" }
     /// The bar that holds the editor's current message; its value names the message kind.
     public static func bar(_ path: String) -> String { "editor.bar:\(path)" }
+    /// `editor.gutter:<absPath>`: the git gutter; its value counts the hunks, such as "2 changed hunks".
+    public static func gutter(_ path: String) -> String { "editor.gutter:\(path)" }
+    /// `pane.diff:<absPath>`: a diff pane's body (UX §6.3).
+    public static func diff(_ path: String) -> String { "pane.diff:\(path)" }
+    /// `pane.openFile:<absPath>`: Open File in a diff pane.
+    public static func openFile(_ path: String) -> String { "pane.openFile:\(path)" }
     /// The Go to Line field (⌘L).
     public static func goToLine(_ path: String) -> String { "editor.goToLine:\(path)" }
 }

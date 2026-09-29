@@ -495,8 +495,17 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
     if req.method == super::fs::FS_LIST {
         return super::fs::list(shared, &req).await;
     }
+    if super::git::handles(&req.method) {
+        return super::git::dispatch(shared, &req).await;
+    }
     if req.method == methods::FILE_OPEN {
         return super::file::open(shared, session, &req).await;
+    }
+    if req.method == methods::PROC_PORTS {
+        return super::procs::ports(shared, &req.params).await;
+    }
+    if req.method == methods::PROC_STOP {
+        return super::procs::stop(shared, session, &req.params).await;
     }
     if req.method == methods::TAB_ASK {
         return tab_ask(shared, session, &req.params).await;
@@ -746,6 +755,9 @@ const READ_ONLY: &[&str] = &[
     "fs.list",
     "fs.watch",
     "fs.unwatch",
+    "git.status",
+    "git.diff",
+    "git.baseText",
     "activity.list",
     "ui.window",
     "ui.tree",

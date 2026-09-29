@@ -9,6 +9,8 @@ public final class EditorRegistry {
     public var recoveryDirectory: URL?
     /// Called when any editor's dirty state changes.
     public var onDirtyChange: (() -> Void)?
+    /// Reads a file's text at HEAD for the git gutter (`git.baseText`); nil when HEAD doesn't have it.
+    public var baseTextLoader: ((String) async -> String?)?
 
     private var editors: [String: FileEditorView] = [:]
 
@@ -22,8 +24,15 @@ public final class EditorRegistry {
         if let editor = editors[path] { return editor }
         let editor = FileEditorView(path: path, theme: theme, recoveryDirectory: recoveryDirectory)
         editor.onDirtyChange = { [weak self] _ in self?.onDirtyChange?() }
+        editor.baseTextLoader = baseTextLoader
+        editor.refreshBaseText()
         editors[path] = editor
         return editor
+    }
+
+    /// HEAD moved (a commit, a branch switch): every editor under `root` refetches its base text.
+    public func refreshBaseTexts(under root: String) {
+        for (path, editor) in editors where path.hasPrefix(root + "/") { editor.refreshBaseText() }
     }
 
     public func existing(for path: String) -> FileEditorView? {

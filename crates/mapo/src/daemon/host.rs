@@ -17,6 +17,14 @@ impl Host {
         self.tabs.lock().ok()?.get(id).cloned()
     }
 
+    /// Every live tab handle.
+    pub fn all(&self) -> Vec<TabHandle> {
+        self.tabs
+            .lock()
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     fn insert(&self, id: String, handle: TabHandle) -> Option<TabHandle> {
         self.tabs.lock().ok()?.insert(id, handle)
     }

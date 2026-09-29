@@ -77,3 +77,22 @@ import Testing
     #expect(SyntaxLanguage(path: "/a/b.tsx") == .typescript)
     #expect(SyntaxLanguage(path: "/a/b.txt") == nil)
 }
+
+@MainActor @Test func gitGutterMarksHunks() {
+    let base = "a\nb\nc\nd\ne\n"
+    let marks = GitGutterMarks(base: base, text: "a\nB\nc\nnew\nd\n")
+    #expect(marks.lines == [1: .modified, 3: .added])
+    #expect(marks.deletions == [5])
+    #expect(marks.hunks == 3)
+    #expect(marks.summary == "3 changed hunks")
+    #expect(GitGutterMarks(base: base, text: base).summary == "no changes")
+    #expect(GitGutterMarks(base: base, text: "b\nc\nd\ne\n").deletions == [0])
+}
+
+@MainActor @Test func diffLinesParse() {
+    let diff = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n"
+    let lines = DiffLine.parse(diff)
+    #expect(lines.map(\.kind) == [.hunk, .context, .removed, .added, .context])
+    #expect(lines.map(\.old) == [nil, 1, 2, nil, 3])
+    #expect(lines.map(\.new) == [nil, 1, nil, 2, 3])
+}

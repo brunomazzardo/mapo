@@ -147,6 +147,8 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
             tool_summary: None,
             last_message: None,
             command_line: None,
+            ports: Vec::new(),
+            served: false,
         })
     })?;
     for row in rows {

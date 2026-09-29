@@ -150,6 +150,9 @@ struct Inner {
     pid: Option<u32>,
     /// The PTY read task. It holds the master's read half, so close aborts it to hang up.
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Bumped per command, so a newer command's scans supersede an older schedule.
+    scan_generation: std::sync::atomic::AtomicU64,
+    last_ports: Mutex<Vec<u16>>,
 }
 
 /// A running tab.
@@ -304,6 +307,8 @@ pub fn launch(spec: &LaunchSpec, ctx: &Arc<HostContext>) -> Option<TabHandle> {
         started: Instant::now(),
         pid: child.id(),
         reader: Mutex::new(None),
+        scan_generation: std::sync::atomic::AtomicU64::new(0),
+        last_ports: Mutex::new(Vec::new()),
     });
     sink(&spec.tab_id, TabFact::Spawned);
     let reader = tokio::spawn(read_loop(
@@ -364,6 +369,16 @@ async fn read_loop(
                         inner_write(&inner, format!("{cmd}\r").as_bytes()).await;
                     }
                 }
+            }
+            if matches!(
+                f,
+                TabFact::Mark(CoreMark::CommandStart | CoreMark::CommandEnd(_))
+            ) {
+                schedule_scans(
+                    &inner,
+                    &ctx,
+                    matches!(f, TabFact::Mark(CoreMark::CommandStart)),
+                );
             }
             (ctx.sink)(&inner.id, f);
         }
@@ -484,6 +499,53 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
     (facts, replies, None)
 }
 
+/// Port scans (T4.1): on a command's start and end, then 1, 2 and 5 s after the start, then every
+/// 10 s while it runs. Idle tabs are never scanned. A newer command cancels an older schedule.
+fn schedule_scans(inner: &Arc<Inner>, ctx: &Arc<HostContext>, started: bool) {
+    let generation = inner
+        .scan_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        + 1;
+    let (inner, ctx) = (inner.clone(), ctx.clone());
+    tokio::spawn(async move {
+        scan_ports(&inner, &ctx).await;
+        if !started {
+            return;
+        }
+        let mut delays = vec![1u64, 1, 3];
+        delays.extend(std::iter::repeat_n(10, 360));
+        for d in delays {
+            tokio::time::sleep(Duration::from_secs(d)).await;
+            let current = inner
+                .scan_generation
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if current != generation || lock(&inner).exit.is_some() {
+                return;
+            }
+            scan_ports(&inner, &ctx).await;
+        }
+    });
+}
+
+async fn scan_ports(inner: &Arc<Inner>, ctx: &Arc<HostContext>) {
+    let Some(pid) = inner.pid else { return };
+    let ports = tokio::task::spawn_blocking(move || mapo_proc::tab_ports(pid))
+        .await
+        .unwrap_or_default();
+    let changed = {
+        let mut last = inner.last_ports.lock().unwrap_or_else(|p| p.into_inner());
+        let changed = *last != ports;
+        if changed {
+            last.clone_from(&ports);
+        }
+        changed
+    };
+    if changed {
+        tracing::debug!(tab = %inner.id, ?ports, "ports");
+        (ctx.sink)(&inner.id, TabFact::Ports(ports));
+    }
+}
+
 async fn inner_write(inner: &Inner, bytes: &[u8]) -> bool {
     let mut w = inner.writer.lock().await;
     match w.as_mut() {
@@ -527,6 +589,11 @@ fn timeout_error(what: &str, ms: u64) -> RpcError {
 impl TabHandle {
     pub fn id(&self) -> &str {
         &self.inner.id
+    }
+
+    /// The shell's pid.
+    pub fn pid(&self) -> Option<u32> {
+        self.inner.pid
     }
 
     /// Writes raw bytes to the PTY (attach input).

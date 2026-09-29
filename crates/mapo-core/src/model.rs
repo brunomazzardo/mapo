@@ -43,6 +43,10 @@ pub struct Tab {
     pub last_message: Option<String>,
     /// The running (or last) command's line, from the preexec title.
     pub command_line: Option<String>,
+    /// Listening TCP ports on the tab's terminal (T4.1).
+    pub ports: Vec<u16>,
+    /// The running command listened on a port at some point.
+    pub served: bool,
 }
 
 impl Tab {

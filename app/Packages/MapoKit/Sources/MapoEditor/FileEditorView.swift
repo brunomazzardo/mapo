@@ -44,6 +44,10 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
     public var onCloseRequest: (() -> Void)?
     /// The registry's listener.
     var onDirtyChange: ((FileEditorView) -> Void)?
+    /// Reads the file's text at HEAD (`git.baseText`); nil when HEAD doesn't have it.
+    var baseTextLoader: ((String) async -> String?)?
+    /// The git gutter's marks against HEAD (R-ED-3).
+    public private(set) var gitMarks = GitGutterMarks()
 
     private var document: FileDocument
     private let theme: EditorTheme
@@ -58,6 +62,8 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
     private var highlightWork: DispatchWorkItem?
     private var recoveryTimer: Timer?
     private var lastRecoveryGeneration = -1
+    private var baseText: String?
+    private var gutterWork: Task<Void, Never>?
 
     private let barView = EditorBarView()
     private let goToLineBar = GoToLineBar()
@@ -115,6 +121,44 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
         recoveryTimer?.invalidate()
         recoveryTimer = nil
         highlightWork?.cancel()
+        gutterWork?.cancel()
+    }
+
+    // MARK: Git gutter (R-ED-3, UX §6.1)
+
+    /// Fetches HEAD's text again (after a commit or a branch switch) and redraws the gutter.
+    public func refreshBaseText() {
+        guard let baseTextLoader else { return }
+        let path = path
+        Task { [weak self] in
+            let base = await baseTextLoader(path)
+            guard let self else { return }
+            baseText = base
+            updateGitMarks()
+        }
+    }
+
+    /// Diffs the buffer against the base 200 ms after typing stops.
+    private func scheduleGitMarks() {
+        gutterWork?.cancel()
+        gutterWork = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.updateGitMarks()
+        }
+    }
+
+    private func updateGitMarks() {
+        let marks: GitGutterMarks
+        if let textView, kind == .text || kind == .largeText {
+            // Without a base in HEAD, a file in a repository is all new; outside one there are no marks.
+            marks = baseText.map { GitGutterMarks(base: $0, text: textView.string) } ?? GitGutterMarks()
+        } else {
+            marks = GitGutterMarks()
+        }
+        gitMarks = marks
+        gutter?.marks = marks
+        gutter?.setAccessibilityValue(marks.summary)
     }
 
     // MARK: Loading
@@ -207,6 +251,12 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
         let gutter = LineNumberGutter()
         gutter.textView = text
         gutter.theme = theme
+        gutter.marks = gitMarks
+        gutter.setAccessibilityElement(true)
+        gutter.setAccessibilityRole(.group)
+        gutter.setAccessibilityIdentifier(EditorAXID.gutter(path))
+        gutter.setAccessibilityLabel("Changes Against HEAD")
+        gutter.setAccessibilityValue(gitMarks.summary)
 
         addSubview(gutter, positioned: .below, relativeTo: barView)
         addSubview(scroll, positioned: .below, relativeTo: barView)
@@ -311,6 +361,7 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
         gutter?.needsDisplay = true
         updateCurrentLine()
         scheduleHighlight(now: highlightNow)
+        scheduleGitMarks()
     }
 
     private func setDirty(_ dirty: Bool) {

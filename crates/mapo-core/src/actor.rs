@@ -104,6 +104,8 @@ pub enum TabFact {
     Mark(Mark),
     /// The command line of the command that just started (the preexec title), unthrottled.
     CommandLine(String),
+    /// TCP ports processes on the tab's terminal listen on (T4.1); empty when none.
+    Ports(Vec<u16>),
     Exited {
         code: i32,
         after_prompt: bool,
@@ -204,6 +206,7 @@ impl CoreHandle {
                 | methods::ACTIVITY_LIST
                 | methods::TAB_INTERRUPT
                 | methods::WORKSPACE_CONFIGURE
+                | methods::DIFF_OPEN
         )
     }
 
@@ -741,6 +744,7 @@ impl Core {
             | methods::PANE_CLEAR_RECENT => self.pane_call(method, params, caller),
             // Not in `handles`: the daemon checks the path first (crates/mapo/src/daemon/file.rs).
             methods::FILE_OPEN => self.file_open(parse_params(params)?, caller),
+            methods::DIFF_OPEN => self.diff_open(parse_params(params)?, caller),
             other => Err(RpcError::invalid(format!("unknown method {other}"))),
         }
     }
@@ -868,6 +872,9 @@ impl Core {
             pane_id: pane.map(str::to_owned),
             last_exit: t.last_exit,
             launch_error: t.launch_error.clone(),
+            server: (!t.ports.is_empty()).then(|| mapo_protocol::types::ServerInfo {
+                ports: t.ports.clone(),
+            }),
             agent: (t.agent.is_some() || t.kind == TabKind::Agent).then(|| {
                 mapo_protocol::types::AgentInfo {
                     hooks_connected: t.agent.as_ref().is_some_and(|a| a.hooks_connected),
@@ -1118,6 +1125,8 @@ impl Core {
             tool_summary: None,
             last_message: None,
             command_line: None,
+            ports: Vec::new(),
+            served: false,
         };
         self.tabs.push(tab);
         let t = self.tabs.len() - 1;
@@ -1408,6 +1417,12 @@ impl Core {
             }
             TabFact::Title(title) => tab.live_title = title,
             TabFact::CommandLine(line) => tab.command_line = Some(line),
+            TabFact::Ports(ports) => {
+                if !ports.is_empty() {
+                    tab.served = true;
+                }
+                tab.ports = ports;
+            }
             TabFact::Mark(Mark::PromptStart | Mark::PromptEnd) => {
                 tab.facts.spawning = false;
                 tab.facts.in_command = false;
@@ -1432,6 +1447,12 @@ impl Core {
                 }
                 let ran = tab.command_started.take().map(|t| t.elapsed());
                 let code = code.unwrap_or(0);
+                // A server that exits non-zero is a failure however long it ran (T4.1).
+                let served = std::mem::take(&mut tab.served);
+                // Ctrl-C (130) and SIGTERM (143) are someone stopping the server on purpose.
+                if served && !matches!(code, 0 | 130 | 143) {
+                    tab.facts.failed_exit = Some(code);
+                }
                 if let Some(ran) = ran {
                     tab.last_exit = Some(mapo_protocol::types::LastExit {
                         code,

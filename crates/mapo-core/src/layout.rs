@@ -118,13 +118,13 @@ pub fn tab_in<'a>(layout: &'a Layout, pane: &str) -> Option<&'a str> {
     }
 }
 
-/// The workspace's file pane (UX §6: at most one), if any.
+/// The workspace's file pane (UX §6: at most one), showing a file or a diff, if any.
 pub fn file_pane(layout: &Layout) -> Option<&str> {
     fn find(node: &Node) -> Option<&str> {
         match node {
             Node::Pane {
                 id,
-                content: PaneContent::File { .. },
+                content: PaneContent::File { .. } | PaneContent::Diff { .. },
                 ..
             } => Some(id),
             Node::Pane { .. } => None,

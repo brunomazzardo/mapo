@@ -42,6 +42,8 @@ final class PaneCardView: NSView {
     private(set) weak var host: TerminalHostView?
     /// The file pane's editor (T1.6).
     private(set) weak var editor: FileEditorView?
+    /// The diff pane's view (T4.3).
+    private(set) weak var diffView: DiffView?
     private let actions: PaneCardActions
 
     private let ring = CALayer()
@@ -96,7 +98,21 @@ final class PaneCardView: NSView {
 
     /// Shows `model`, hosting `host` in the body when the pane shows a terminal, or `editor` when it shows a
     /// file.
-    func update(_ model: PaneCardModel, host: TerminalHostView?, editor: FileEditorView? = nil) {
+    func update(
+        _ model: PaneCardModel, host: TerminalHostView?, editor: FileEditorView? = nil, diff: DiffView? = nil
+    ) {
+        if diff !== diffView {
+            if let old = diffView, old.superview === body {
+                old.removeFromSuperview()
+                DiffPanes.release(old.path)
+            }
+            diffView = diff
+            if let diff { body.addSubview(diff, positioned: .below, relativeTo: empty) }
+            needsLayout = true
+        } else if let diff, diff.superview !== body {
+            body.addSubview(diff, positioned: .below, relativeTo: empty)
+            needsLayout = true
+        }
         if editor !== self.editor {
             if let old = self.editor {
                 old.onStateChange = nil
@@ -139,7 +155,7 @@ final class PaneCardView: NSView {
         header.isHidden = !(model.tab != nil || model.content.isFile)
         empty.isHidden = !(model.tab == nil && !model.content.isFile)
         empty.update(paneId: model.paneId, takesReturn: model.takesReturn)
-        fileLabel.isHidden = editor != nil || !model.content.isFile
+        fileLabel.isHidden = editor != nil || diffView != nil || !model.content.isFile
         fileLabel.stringValue =
             model.content.filePath.map { "\(($0 as NSString).lastPathComponent)\nDiffs open in T4.2." } ?? ""
         if let editor { header.updateFile(dirty: editor.isDirty, meta: editor.headerMeta) }
@@ -174,6 +190,7 @@ final class PaneCardView: NSView {
         host?.frame = body.bounds.insetBy(dx: 10, dy: 8)
         empty.frame = body.bounds
         if let editor, editor.superview === body { editor.frame = body.bounds }
+        if let diffView, diffView.superview === body { diffView.frame = body.bounds }
         fileLabel.frame = NSRect(x: 12, y: body.bounds.midY - 20, width: max(body.bounds.width - 24, 0), height: 40)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -217,6 +234,8 @@ final class PaneCardView: NSView {
             host.focus()
         } else if let editor, editor.superview === body {
             editor.focus()
+        } else if let diffView, diffView.superview === body {
+            window?.makeFirstResponder(diffView)
         } else if !empty.isHidden {
             empty.focusDefault()
         }

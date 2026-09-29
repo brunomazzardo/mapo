@@ -27,3 +27,5 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 uuid.workspace = true
 mapo-agent.workspace = true
+mapo-mcp.workspace = true
+mapo-proc.workspace = true

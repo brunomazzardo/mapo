@@ -80,7 +80,16 @@ pub struct TabSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_error: Option<LaunchError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentInfo>,
+}
+
+/// A tab detected as a server: the ports its processes listen on (D-20).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerInfo {
+    pub ports: Vec<u16>,
 }
 
 /// One activity-log entry (PROTOCOL §7 `Activity`).
@@ -186,7 +195,15 @@ pub struct WorkspaceSummary {
 pub enum PaneContent {
     Tab { tab: String },
     File { file: String },
+    Diff { diff: DiffRef },
     Empty { empty: bool },
+}
+
+/// A diff pane's file: the repository root and the file's absolute path (PROTOCOL §7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffRef {
+    pub root: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -459,6 +476,17 @@ pub struct FileOpen {
     pub workspace: Option<String>,
     #[serde(default)]
     pub beside: Option<bool>,
+}
+
+/// `diff.open {root, path, workspace?}`: shows a file's diff against HEAD in the workspace's file pane
+/// (R-GIT-2), placed like `file.open` but leaving focus where it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DiffOpen {
+    pub root: String,
+    pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// `pane.focus`: a pane id, or a direction from the focused pane.

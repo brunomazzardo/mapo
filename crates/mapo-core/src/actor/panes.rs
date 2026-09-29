@@ -4,8 +4,8 @@
 
 use mapo_protocol::hello::Caller;
 use mapo_protocol::types::{
-    FileOpen, Node, PaneContent, PaneFocus, PaneRef, PaneResize, PaneSplit, SplitContent,
-    TabCreate, TabKind,
+    DiffOpen, DiffRef, FileOpen, Node, PaneContent, PaneFocus, PaneRef, PaneResize, PaneSplit,
+    SplitContent, TabCreate, TabKind,
 };
 use mapo_protocol::{RpcError, methods, parse_params};
 use serde_json::Value;
@@ -117,6 +117,46 @@ impl Core {
             )));
         }
         let ws = self.resolve_workspace(p.workspace.as_deref(), caller)?;
+        let pane = self.file_pane_for(ws, p.beside == Some(false))?;
+        let layout = &mut self.workspaces[ws].layout;
+        layout::open_file(layout, &pane, &p.path).map_err(layout_error)?;
+        layout.focused_pane_id = pane.clone();
+        self.activate(ws);
+        self.focus_changed(ws);
+        Ok(serde_json::json!({ "path": p.path, "paneId": pane }))
+    }
+
+    /// `diff.open` (R-GIT-2, UX §5.3): the workspace's file pane shows the diff of `path`, placed like
+    /// `file.open`. Focus stays where it is, so ↑ and ↓ in the Changes list step through diffs.
+    pub(super) fn diff_open(&mut self, p: DiffOpen, caller: &Caller) -> Result<Value, RpcError> {
+        if !p.path.starts_with('/') || !p.root.starts_with('/') {
+            return Err(RpcError::invalid(format!(
+                "root and path must be absolute: {} {}",
+                p.root, p.path
+            )));
+        }
+        let ws = self.resolve_workspace(p.workspace.as_deref(), caller)?;
+        let focused = self.workspaces[ws].layout.focused_pane_id.clone();
+        let pane = self.file_pane_for(ws, false)?;
+        let layout = &mut self.workspaces[ws].layout;
+        let content = PaneContent::Diff {
+            diff: DiffRef {
+                root: p.root,
+                path: p.path.clone(),
+            },
+        };
+        layout::set_content(layout, &pane, content).map_err(layout_error)?;
+        if layout::content(layout, &focused).is_some() {
+            layout.focused_pane_id = focused;
+        }
+        self.activate(ws);
+        self.layout_changed(ws);
+        Ok(serde_json::json!({ "path": p.path, "paneId": pane }))
+    }
+
+    /// The pane a file or diff goes to (R-LAY-5): the workspace's file pane, else a focused empty pane
+    /// (or the focused pane when `in_focused`), else a new pane split right of the focused terminal.
+    fn file_pane_for(&mut self, ws: usize, in_focused: bool) -> Result<String, RpcError> {
         let layout = &self.workspaces[ws].layout;
         let focused = layout.focused_pane_id.clone();
         let pane = match layout::file_pane(layout).map(str::to_owned) {
@@ -124,7 +164,7 @@ impl Core {
             None if matches!(
                 layout::content(layout, &focused),
                 Some(PaneContent::Empty { .. })
-            ) || p.beside == Some(false) =>
+            ) || in_focused =>
             {
                 focused
             }
@@ -149,12 +189,7 @@ impl Core {
                 pane
             }
         };
-        let layout = &mut self.workspaces[ws].layout;
-        layout::open_file(layout, &pane, &p.path).map_err(layout_error)?;
-        layout.focused_pane_id = pane.clone();
-        self.activate(ws);
-        self.focus_changed(ws);
-        Ok(serde_json::json!({ "path": p.path, "paneId": pane }))
+        Ok(pane)
     }
 
     /// The workspace holding pane or split `id`: the `workspace` param's, else any workspace's.
@@ -365,7 +400,12 @@ impl Core {
                 .and_then(|id| self.tab_index(id))
                 .map(|i| self.tabs[i].cwd.clone())
         };
-        if let Some(PaneContent::File { file }) = layout::content(layout, pane)
+        if let Some(
+            PaneContent::File { file }
+            | PaneContent::Diff {
+                diff: DiffRef { path: file, .. },
+            },
+        ) = layout::content(layout, pane)
             && let Some(dir) = std::path::Path::new(file).parent()
         {
             return dir.to_string_lossy().into_owned();

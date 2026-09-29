@@ -66,16 +66,18 @@ final class WorkspacePanesView: NSView {
                     host = registry.host(for: tabId, tabName: summary.name)
                     shown.append(tabId)
                 }
-                // A file pane hosts its path's editor (T1.6); diffs arrive in T4.2.
+                // A file pane hosts its path's editor (T1.6), a diff pane its `DiffView` (T4.3).
                 var editor: FileEditorView?
                 if case .file(let path) = content { editor = FileEditors.registry.editor(for: path) }
+                var diff: DiffView?
+                if case .diff(let ref) = content { diff = DiffPanes.view(for: ref) }
                 let isFocused = id == focused
                 card.update(
                     PaneCardModel(
                         paneId: id, content: content, tab: tab, branch: branch, isFocused: isFocused,
                         showsRing: paneCount > 1, isKeyWindow: isKeyWindow,
                         takesReturn: isFocused && tab == nil && !content.isFile, recentFiles: recentFiles),
-                    host: host, editor: editor)
+                    host: host, editor: editor, diff: diff)
                 return card
             case .split(let id, let axis, let ratios, let children):
                 seenSplits.insert(id)

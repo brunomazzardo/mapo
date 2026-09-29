@@ -39,6 +39,35 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **T4.3 done** (subagent) and **T4.4: M4 gate PASS.**
+  - **T4.3:**
+    - `git.status`, `git.diff` and `git.baseText` via the git CLI (`-c core.fsmonitor=false --no-optional-locks`).
+    - The Changes segment has a summary, rows with letters and +/- counts, the warning above 1,500 lines or 50 files, and states.
+    - A new `diff.open` method (a deviation: PROTOCOL had no way to show a diff pane) opens a read-only unified `pane.diff:<absPath>` with Open File.
+    - The editor's git gutter is diffed against HEAD with `CollectionDifference`, debounced at 200 ms (`editor.gutter:<path>`).
+    - `task-t4-3` PASS 16/16: diff opens in 141 ms, commit to empty list 479 ms, gutter after an edit 271 ms.
+  - **M4 gate:** `just drive m4-servers-changes` PASS 27/27, evidence `evidence/m4-servers-changes/20260929-040201`. It combines Changes, diff and gutter with server detection, ports and a guarded stop.
+  - Open (found by the subagent): while a file or diff pane has focus, the Files segment re-roots to `no-terminal` instead of keeping the last focused tab's folder (R-FS-2). Changes works around it; Files doesn't yet.
+  - Every drive re-passed on one integration build: M0, M1, M2 and M3 gates, T1.5, T1.6, T1.8, T2.2, T3.5, T4.1, T4.3.
+- **T5.1 performance pass (first run, Release build).** `just profile=release drive m5-switch` PASS, evidence `evidence/m5-switch/20260929-034946`. Fixture: 20 tabs, 10 visible (two workspaces of 5 panes each after `seq 1 2000`, plus 10 hidden tabs).
+
+  | Metric | Budget | Measured (Release) |
+  |---|---|---|
+  | Cold launch, daemon running, median of 5 | ≤ 400 ms | 396 ms |
+  | Workspace switch p95 of 20, 5 panes each | ≤ 50 ms | 114 ms (miss; see below) |
+  | Reattach after a daemon restart | ≤ 150 ms | 270 ms (miss; includes reconnect backoff) |
+  | Attach replay (daemon side) | | 4 ms |
+  | Idle CPU over 30 s | app ≈ 0, daemon < 0.5 % | both < 0.1 % |
+  | Footprint | daemon ≤ 150 MB, app ≤ 250 MB | daemon 14 MB, app 71 MB |
+
+  - The switch miss: a `sample` of the app during 60 switches shows the main thread mostly idle (mach_msg), so the time is waiting on the daemon round trip and frame presentation. The window was occluded all night (display asleep), which throttles frames, so re-measure with the display awake before tuning. The Debug runs measured 29–37 ms with 3 panes.
+  - The reattach miss: the span runs from losing the connection to synced, so it includes the app's reconnect backoff (250 ms first step). The budget means reattaching an app to a running daemon; measure that as relaunch-to-painted in the next pass.
+  - Keystroke latency against Ghostty wasn't measured (T5.3, with the user).
+  - Fixed on the way: Release builds failed ("mis-aligned LINKEDIT string pool" in proc-macro dylibs), because Cargo's default release `strip` corrupts dylibs with this machine's Xcode 27 `strip`. `[profile.release] strip = "none"`.
+- **T3.7: M3 gate PASS** (synthetic). `m3-control` PASS 9/9, evidence `evidence/m3-control/20260929-034450`. A shell tab acting as an agent, with its own `MAPO_TOKEN`, creates tab B, runs a command, waits on output, reads the screen, is refused closing B, closes it with `--force`, finds both in the activity log, and lists tabs through `mapo mcp`. The real-Claude `tab ask` and MCP-from-Claude steps are skipped (usage limit).
+- **T3.5 done** (subagent). `mapo mcp` on rmcp `=3.5.0` exposes 32 tools, with strict hand-written schemas (a deviation from schemars), plus `mapo://skill`. It requires `MAPO_TOKEN` and exits 0 when stdin closes. Drive `task-t3-5` PASS 18/18.
+- **T4.1 and T4.2 done** (coordinator; `crates/mapo-proc` on libproc `=0.14.11`). Ports are scanned on 133;C and D, then at 1, 2 and 5 s, then every 10 s while the command runs; idle tabs are never scanned. `TabSummary.server.ports`. A server exiting non-zero is failed ("exit N"), but Ctrl-C (130) and SIGTERM (143) count as intentional stops. `proc.ports`, `mapo ports` (maps listeners to tabs by TTY or ancestry), `proc.stop` and `mapo process stop` (identity re-check, refuses Mapo's own processes, SIGTERM only, needs `--force` from agents). Drive `task-t4-1` PASS 11/11: detection within about 1 s.
+- **T3.1 partial (parity check by hand).** Every VS Code build verb for a v1 feature exists with the same name: `workspace new|list|rename|activate|delete|move|configure`, `tab new|list|close|rename|focus|move|send|read|wait|run|ask|stop|interrupt|restart`, `status`, `events`, `activity`, `ports`, `process stop`, `file open`, `pane …`, `explorer …`, `skill`, `mcp`, `hook`, `attach`, `ui …`. The absent verbs belong to features out of v1: `setup`, `repo`, `action`/`actions`/`run` and `mprocs` (D-3), `server` (D-20), and `pin`/`unpin` (R-WS-8, LATER). Not done: the table-driven drive over every verb, and grouping `mapo --help` by noun.
 - **T2.6: M2 gate PASS on the synthetic path.** `just drive m2-agents` PASS 27/27, evidence `evidence/m2-agents/20260929-033827`. It covers every R-AG-3 transition through `mapo hook`, attention while hidden, rail and dock badges, the notification log with coalescing, ⌘J, interrupt from the pane's Stop and ⇧⌘X, ⇧⌘T, and Working and Done in the rail and pane. The real-Claude path is skipped with its reason recorded (usage limit).
 - **T2.4 done** (app side by a subagent).
   - **What's in it:**

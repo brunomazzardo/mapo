@@ -5,8 +5,10 @@ mod attach;
 mod conn;
 mod file;
 mod fs;
+mod git;
 mod host;
 mod logging;
+mod procs;
 
 pub use logging::today;
 

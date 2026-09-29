@@ -388,6 +388,18 @@ extension MapoClient {
         _ = try await call("tab.move", IndexParams(tab: id, index: index), as: TabSummary.self)
     }
 
+    /// `workspace.configure`: the command new agent tabs in the workspace run (UX §3.5).
+    public func setAgentCommand(workspaceId: String, command: String) async throws {
+        _ = try await call(
+            "workspace.configure", ConfigureParams(workspace: workspaceId, agentCommand: command),
+            as: WorkspaceSummary.self)
+    }
+
+    nonisolated private struct ConfigureParams: Encodable, Sendable {
+        var workspace: String
+        var agentCommand: String
+    }
+
     public func renameWorkspace(id: String, name: String) async throws {
         _ = try await call("workspace.rename", NameParams(workspace: id, name: name), as: WorkspaceSummary.self)
     }

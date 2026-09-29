@@ -46,7 +46,8 @@ extension RailViewController {
         }
     }
 
-    /// New Shell Tab · New Agent Tab | Rename | Move Up · Move Down | Delete Workspace.
+    /// New Shell Tab · New Agent Tab · New Tab in Folder… | Rename · Set Agent Command… | Move Up · Move Down |
+    /// Delete Workspace.
     private func workspaceMenu(_ id: String, key: String) -> [[NSMenuItem]] {
         guard store.workspace(id: id) != nil else { return [] }
         let position = store.workspaces.firstIndex { $0.id == id } ?? 0
@@ -58,8 +59,12 @@ extension RailViewController {
                 railMenuItem("New Agent Tab") { [weak self] in
                     self?.run("New Agent Tab") { try await $0.newTab(inWorkspace: id, kind: "agent") }
                 },
+                railMenuItem("New Tab in Folder…") { [weak self] in self?.actions.newTabInFolder(id) },
             ],
-            [railMenuItem("Rename") { [weak self] in self?.beginRename(key: key) }],
+            [
+                railMenuItem("Rename") { [weak self] in self?.beginRename(key: key) },
+                railMenuItem("Set Agent Command…") { [weak self] in self?.actions.setAgentCommand(id) },
+            ],
             moveItems(position: position, count: store.workspaces.count, key: key) { client, index in
                 try await client.moveWorkspace(id: id, to: index)
             },

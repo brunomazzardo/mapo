@@ -58,7 +58,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                         self?.paneArea?.focusTerminal()
                     }
                 },
-                newWorkspace: { [weak self] in self?.newWorkspace() }))
+                newWorkspace: { [weak self] in self?.newWorkspace() },
+                newTabInFolder: { [weak self] id in self?.newTabInFolder(workspaceId: id) },
+                setAgentCommand: { [weak self] id in self?.setAgentCommand(workspaceId: id) }))
         self.rail = rail
         let panes = PaneAreaViewController(
             store: client.store, registry: registry,
@@ -333,19 +335,38 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
         """
 
-    /// New Tab in Folder… (⌥⌘T): the folder sheet, then a shell there in the focused pane.
-    func newTabInFolder() {
-        guard let window else { return }
-        let folder = focusedTab?.cwd ?? NSHomeDirectory()
+    /// New Tab in Folder… (⌥⌘T, or a workspace row's menu): the folder sheet, then a shell there in the
+    /// workspace's focused pane. The sheet starts at that workspace's focused tab's folder.
+    func newTabInFolder(workspaceId: String? = nil) {
+        guard let window, let workspaceId = workspaceId ?? client.store.activeWorkspaceId else { return }
+        let store = client.store
+        let folder = store.focusedTabId(inWorkspace: workspaceId).flatMap { store.tabs[$0]?.cwd } ?? NSHomeDirectory()
         Task {
             guard let path = await FolderSheet.choose(on: window, initialFolder: folder) else { return }
             metrics.beginTabCreate()
             paneArea?.expectFocusChange()
             run("New Tab in Folder") { client in
                 _ = try await client.call(
-                    Method.tabCreate, TabCreateParams(kind: "shell", cwd: path, placement: "focused", focus: true),
+                    Method.tabCreate,
+                    TabCreateParams(
+                        workspace: workspaceId, kind: "shell", cwd: path, placement: "focused", focus: true),
                     as: TabSummary.self)
             }
+        }
+    }
+
+    /// Set Agent Command… (the Workspace menu, or a workspace row's menu): the command sheet, then
+    /// `workspace.configure`.
+    func setAgentCommand(workspaceId: String? = nil) {
+        guard let window, let id = workspaceId ?? client.store.activeWorkspaceId,
+            let workspace = client.store.workspace(id: id)
+        else { return NSSound.beep() }
+        Task {
+            guard
+                let command = await AgentCommandSheet.choose(
+                    on: window, workspaceName: workspace.name, current: workspace.agentCommand)
+            else { return }
+            run("Set Agent Command") { try await $0.setAgentCommand(workspaceId: id, command: command) }
         }
     }
 

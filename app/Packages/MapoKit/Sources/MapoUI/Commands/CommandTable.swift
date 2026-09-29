@@ -284,7 +284,7 @@ public enum CommandTable {
             method: "workspace.rename", startsGroup: true),
         Command(
             "workspace.setAgentCommand", .workspace, "Set Agent Command…", #selector(A.setAgentCommand(_:)),
-            method: "workspace.configure", milestone: "M2"),
+            method: "workspace.configure"),
         Command(
             "workspace.moveUp", .workspace, "Move Workspace Up", #selector(A.moveWorkspaceUp(_:)),
             method: "workspace.move", startsGroup: true),

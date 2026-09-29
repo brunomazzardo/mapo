@@ -211,6 +211,22 @@ FONT_COLS=0
     poll '[.[].name]' '["Workspace 1","Second"]' workspaces
 }
 
+# The sheet shows the current command, fully selected; Save is disabled while the field is empty, and
+# saving configures the workspace.
+'row:workspace.setAgentCommand'() {
+    palette_run 'Set Agent Command…'
+    mapo ui wait dialog.field --state focused --timeout-ms 2000 >/dev/null
+    ui_snapshot agent-command-sheet; ui_shot agent-command-sheet
+    snap | jq '[.tree | .. | objects | select(.id? == "dialog.field") | .value]' | expect_json . '["echo fakeagent"]'
+    mapo ui key delete >/dev/null
+    poll '[.tree | .. | objects | select(.id? == "dialog.confirm") | .enabled]' '[false]' snap
+    mapo ui type 'echo second-agent' >/dev/null
+    poll '[.tree | .. | objects | select(.id? == "dialog.confirm") | .enabled]' '[true]' snap
+    mapo ui press dialog.confirm >/dev/null
+    mapo ui wait dialog --state gone --timeout-ms 2000 >/dev/null
+    poll '[.[] | select(.name == "Second") | .agentCommand]' '["echo second-agent"]' workspaces
+}
+
 'row:workspace.moveUp'() {
     activate Second
     palette_run 'Move Workspace Up'

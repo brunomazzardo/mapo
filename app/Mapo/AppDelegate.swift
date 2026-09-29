@@ -133,8 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func previousWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: -1) }
     @objc func nextWorkspace(_ sender: Any?) { windowController?.switchWorkspace(by: 1) }
     @objc func renameWorkspace(_ sender: Any?) { windowController?.renameActiveWorkspace() }
-    /// M2; the item stays disabled.
-    @objc func setAgentCommand(_ sender: Any?) { NSSound.beep() }
+    @objc func setAgentCommand(_ sender: Any?) { windowController?.setAgentCommand() }
     @objc func moveWorkspaceUp(_ sender: Any?) { windowController?.moveActiveWorkspace(by: -1) }
     @objc func moveWorkspaceDown(_ sender: Any?) { windowController?.moveActiveWorkspace(by: 1) }
     @objc func deleteWorkspace(_ sender: Any?) { windowController?.deleteActiveWorkspace() }

@@ -7,14 +7,20 @@ public struct RailActions {
     public var activateWorkspace: (_ workspaceId: String) -> Void
     public var focusTab: (_ tabId: String) -> Void
     public var newWorkspace: () -> Void
+    /// New Tab in Folder… and Set Agent Command… for a workspace row (UX §3.5).
+    public var newTabInFolder: (_ workspaceId: String) -> Void
+    public var setAgentCommand: (_ workspaceId: String) -> Void
 
     public init(
         activateWorkspace: @escaping (String) -> Void, focusTab: @escaping (String) -> Void,
-        newWorkspace: @escaping () -> Void
+        newWorkspace: @escaping () -> Void, newTabInFolder: @escaping (String) -> Void,
+        setAgentCommand: @escaping (String) -> Void
     ) {
         self.activateWorkspace = activateWorkspace
         self.focusTab = focusTab
         self.newWorkspace = newWorkspace
+        self.newTabInFolder = newTabInFolder
+        self.setAgentCommand = setAgentCommand
     }
 }
 

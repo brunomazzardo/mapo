@@ -2,6 +2,7 @@
 
 mod debug;
 mod instance;
+mod state;
 
 use clap::{Parser, Subcommand};
 use mapo_protocol::hello::Role;
@@ -21,6 +22,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// The workspace, by name or id (default: the caller's, then the active one).
+    #[arg(long, global = true)]
+    pub workspace: Option<String>,
+
     /// How long to wait for the daemon or a condition, in milliseconds.
     #[arg(long = "timeout-ms", global = true)]
     pub timeout_ms: Option<u64>,
@@ -31,6 +36,23 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List, create, rename, activate or delete workspaces.
+    #[command(subcommand)]
+    Workspace(state::WorkspaceCommand),
+    /// List, create, close, rename or focus tabs.
+    #[command(subcommand)]
+    Tab(state::TabCommand),
+    /// Show tab states.
+    Status { name: Option<String> },
+    /// Print events; with --follow, stream them.
+    Events {
+        #[arg(long)]
+        follow: bool,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long = "type")]
+        types: Vec<String>,
+    },
     /// Show, list, wait for, stop or clean instances.
     Instance(instance::InstanceArgs),
     /// Run the daemon for this instance (detached unless --foreground).
@@ -54,6 +76,14 @@ pub enum Command {
 impl Cli {
     pub fn run(&self) -> Result<(), CliError> {
         match &self.command {
+            Command::Workspace(cmd) => state::workspace(self, cmd),
+            Command::Tab(cmd) => state::tab(self, cmd),
+            Command::Status { name } => state::status(self, name.as_deref()),
+            Command::Events {
+                follow,
+                after,
+                types,
+            } => state::events(self, *follow, *after, types),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Daemon { foreground } => {
                 crate::daemon::run(&self.resolve_instance()?, *foreground)

@@ -5,6 +5,7 @@ pub mod error;
 pub mod hello;
 pub mod methods;
 pub mod rpc;
+pub mod types;
 
 pub use error::{ErrorData, ErrorKind, RpcError};
 pub use rpc::{Incoming, Notification, Request, Response, parse_params};

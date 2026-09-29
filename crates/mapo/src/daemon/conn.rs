@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mapo_protocol::hello::{
     Caller, CredentialKind, Empty, HelloParams, HelloResult, InstanceInfo, PingResult,
 };
-use mapo_protocol::rpc::{Id, Incoming, Request, Response};
+use mapo_protocol::rpc::{Id, Incoming, Notification, Request, Response};
 use mapo_protocol::{PROTOCOL_VERSION, RpcError, methods, parse_params};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -77,6 +77,7 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     };
 
     let mut stop = shared.shutdown.subscribe();
+    let mut subscribe_task: Option<tokio::task::JoinHandle<()>> = None;
     loop {
         let line = tokio::select! {
             line = read_line(&mut reader) => line,
@@ -85,6 +86,13 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
         match line {
             Ok(Line::Text(text)) if text.trim().is_empty() => continue,
             Ok(Line::Text(text)) => match Incoming::parse(&text) {
+                Ok(Incoming::Request(req)) if req.method == methods::EVENTS_SUBSCRIBE => {
+                    let (shared, tx) = (shared.clone(), tx.clone());
+                    subscribe_task =
+                        Some(tokio::spawn(
+                            async move { subscribe(&shared, &req, &tx).await },
+                        ));
+                }
                 Ok(Incoming::Request(req)) => {
                     let (shared, session, tx) = (shared.clone(), session.clone(), tx.clone());
                     let span = tracing::info_span!("req", id = ?req.id, method = %req.method, caller = ?session.caller.kind);
@@ -117,6 +125,9 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
             }
             Ok(Line::Eof) | Err(_) => break,
         }
+    }
+    if let Some(task) = subscribe_task {
+        task.abort();
     }
     drop(tx);
     let _ = writer.await;
@@ -183,7 +194,7 @@ async fn hello(
         daemon: env!("CARGO_PKG_VERSION").into(),
         boot_id: shared.boot_id.clone(),
         instance: shared.instance.clone(),
-        features: vec![],
+        features: vec!["events".into()],
         caller: caller.clone(),
     };
     let _ = tx.send(encode(&Response::ok(
@@ -193,7 +204,61 @@ async fn hello(
     Some(Session { caller })
 }
 
+/// Streams events after the `events.subscribe` response, until the connection or daemon ends.
+async fn subscribe(shared: &Shared, req: &Request, tx: &mpsc::UnboundedSender<String>) {
+    let params = match parse_params::<mapo_protocol::types::SubscribeParams>(&req.params) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx.send(encode(&Response::err(Some(req.id.clone()), e)));
+            return;
+        }
+    };
+    let mut sub = match shared.core.subscribe(params).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(encode(&Response::err(Some(req.id.clone()), e)));
+            return;
+        }
+    };
+    let _ = tx.send(encode(&Response::ok(
+        req.id.clone(),
+        json!({ "seq": sub.seq }),
+    )));
+    let note =
+        |e: &mapo_protocol::types::Event| encode(&Notification::new(methods::EVENT, json!(e)));
+    for e in &sub.replay {
+        if tx.send(note(e)).is_err() {
+            return;
+        }
+    }
+    let mut stop = shared.shutdown.subscribe();
+    loop {
+        tokio::select! {
+            item = sub.live.recv() => match item {
+                Some(Ok(e)) => {
+                    if tx.send(note(&e)).is_err() {
+                        return;
+                    }
+                }
+                Some(Err(e)) => {
+                    let _ = tx.send(encode(&Response::err(None, e)));
+                    return;
+                }
+                None => return,
+            },
+            _ = tx.closed() => return,
+            _ = stop.changed() => return,
+        }
+    }
+}
+
 async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Value, RpcError> {
+    if mapo_core::CoreHandle::handles(&req.method) {
+        return shared
+            .core
+            .call(&req.method, req.params, session.caller.clone())
+            .await;
+    }
     match req.method.as_str() {
         methods::PING => {
             let _: Empty = parse_params(&req.params)?;
@@ -223,7 +288,7 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
                     "daemon.shutdown needs the app credential",
                 ));
             }
-            let _ = shared.shutdown.send(true);
+            shared.stop_request.notify_one();
             Ok(json!({ "stopping": true }))
         }
         methods::HELLO => Err(RpcError::invalid(

@@ -27,6 +27,9 @@ pub struct Shared {
     pub started: Instant,
     pub token: Secret,
     pub shutdown: watch::Sender<bool>,
+    /// Asks the accept loop to stop (daemon.shutdown); it then flips `shutdown` for everyone.
+    pub stop_request: tokio::sync::Notify,
+    pub core: mapo_core::CoreHandle,
 }
 
 /// `mapo daemon [--foreground]`.
@@ -168,15 +171,29 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
         .build()
         .map_err(|e| RpcError::internal(format!("tokio: {e}")))?;
     let (shutdown, _) = watch::channel(false);
-    let shared = Arc::new(Shared {
-        instance: instance.name.clone(),
-        paths: paths.clone(),
-        boot_id: uuid::Uuid::now_v7().to_string(),
-        started: Instant::now(),
-        token,
-        shutdown,
+    let boot_id = uuid::Uuid::now_v7().to_string();
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let result = runtime.block_on(async {
+        let core = mapo_core::spawn(mapo_core::actor::Options {
+            state_db: &paths.state_db,
+            boot_id: boot_id.clone(),
+            home,
+        })
+        .map_err(|e| RpcError::internal(e.to_string()))?;
+        let shared = Arc::new(Shared {
+            instance: instance.name.clone(),
+            paths: paths.clone(),
+            boot_id,
+            started: Instant::now(),
+            token,
+            shutdown,
+            stop_request: tokio::sync::Notify::new(),
+            core: core.clone(),
+        });
+        let result = accept_loop(shared).await;
+        core.flush().await;
+        result
     });
-    let result = runtime.block_on(accept_loop(shared.clone()));
     runtime.shutdown_timeout(Duration::from_secs(1));
     let _ = std::fs::remove_file(&paths.socket);
     mapo_instance::remove_pid_file(&paths.pid_file, pid);
@@ -187,7 +204,6 @@ fn serve(instance: &Instance) -> Result<(), RpcError> {
 async fn accept_loop(shared: Arc<Shared>) -> Result<(), RpcError> {
     let mut listener = bind(&shared.paths)?;
     tracing::info!(instance = %shared.instance, boot_id = %shared.boot_id, pid = std::process::id(), "ready");
-    let mut stop = shared.shutdown.subscribe();
     let mut term = signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut int = signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut check = tokio::time::interval(Duration::from_secs(60));
@@ -214,9 +230,13 @@ async fn accept_loop(shared: Arc<Shared>) -> Result<(), RpcError> {
             }
             _ = term.recv() => { tracing::info!("SIGTERM"); break; }
             _ = int.recv() => { tracing::info!("SIGINT"); break; }
-            _ = stop.changed() => { tracing::info!("daemon.shutdown"); break; }
+            _ = shared.stop_request.notified() => { tracing::info!("daemon.shutdown"); break; }
         }
     }
+    drop(listener);
+    shared.core.emit("daemon.stopping", json!({}));
+    shared.core.flush().await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
     let _ = shared.shutdown.send(true);
     Ok(())
 }

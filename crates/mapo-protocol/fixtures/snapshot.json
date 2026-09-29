@@ -1,0 +1,52 @@
+{
+  "activeWorkspaceId": "0199a3c1-0000-7000-8000-000000000001",
+  "bootId": "0199a3c0-0000-7000-8000-000000000000",
+  "layouts": {
+    "0199a3c1-0000-7000-8000-000000000001": {
+      "focusedPaneId": "0199a3c3-0000-7000-8000-000000000003",
+      "root": {
+        "content": {
+          "tab": "0199a3c2-0000-7000-8000-000000000002"
+        },
+        "id": "0199a3c3-0000-7000-8000-000000000003",
+        "kind": "pane",
+        "recentFiles": []
+      },
+      "workspaceId": "0199a3c1-0000-7000-8000-000000000001"
+    }
+  },
+  "seq": 6,
+  "tabs": [
+    {
+      "cwd": "/usr/bin",
+      "id": "0199a3c2-0000-7000-8000-000000000002",
+      "kind": "shell",
+      "labeled": true,
+      "launch": {
+        "cwd": "/usr/bin"
+      },
+      "name": "be",
+      "order": 0,
+      "paneId": "0199a3c3-0000-7000-8000-000000000003",
+      "state": "idle",
+      "stateLabel": "",
+      "statusSource": "shell",
+      "title": "be",
+      "visible": true,
+      "workspaceId": "0199a3c1-0000-7000-8000-000000000001"
+    }
+  ],
+  "workspaces": [
+    {
+      "activeTabId": "0199a3c2-0000-7000-8000-000000000002",
+      "attentionCount": 0,
+      "id": "0199a3c1-0000-7000-8000-000000000001",
+      "name": "Obsess",
+      "order": 0,
+      "state": "idle",
+      "stateLabel": "",
+      "summary": "",
+      "tabCount": 1
+    }
+  ]
+}

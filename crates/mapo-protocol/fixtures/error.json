@@ -1,0 +1,13 @@
+{
+  "code": -32001,
+  "data": {
+    "details": {
+      "names": [
+        "be"
+      ]
+    },
+    "hint": "mapo tab list",
+    "kind": "not_found"
+  },
+  "message": "Tab \"x\" not found"
+}

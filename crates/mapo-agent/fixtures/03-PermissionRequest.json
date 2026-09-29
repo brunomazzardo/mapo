@@ -1,0 +1,1 @@
+{"hook_event_name":"PermissionRequest","session_id":"0199aaaa-0000-7000-8000-000000000001","tool_name":"Bash","tool_input":{"command":"pnpm db:migrate","description":"Run migrations"}}

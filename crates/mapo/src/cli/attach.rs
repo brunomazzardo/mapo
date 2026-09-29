@@ -251,7 +251,8 @@ async fn main(instance: Instance, args: &AttachArgs) -> i32 {
                     if !first {
                         write_out(b"\r\nTab closed\r\n").await;
                     } else {
-                        eprintln!("mapo attach: {}", e.message);
+                        // PROTOCOL §4: a JSON line when stderr is piped.
+                        crate::output::print_error(&e, false);
                     }
                     return if first { 1 } else { 0 };
                 }

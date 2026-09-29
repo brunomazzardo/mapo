@@ -24,26 +24,37 @@ struct EventSynthesizer {
     /// mouse-down, so a control that runs a tracking loop takes the up from the queue. Later clicks of a
     /// multi-click wait a turn, so the previous up is handled first.
     func click(at point: NSPoint, button: MouseButton, count: Int, modifiers: KeyModifiers) async {
-        let location = ElementGeometry.eventLocation(ofWindowPoint: point, in: window)
+        var target = window
+        var location = ElementGeometry.eventLocation(ofWindowPoint: point, in: window)
+        // A sheet or child panel (a `dialog`, the palette) over the point is its own window: click it there.
+        let screenPoint = window.convertPoint(toScreen: location)
+        let overlays = [window.attachedSheet].compactMap { $0 } + (window.childWindows ?? [])
+        if let over = overlays.last(where: { $0.isVisible && $0.frame.contains(screenPoint) }) {
+            target = over
+            location = over.convertPoint(fromScreen: screenPoint)
+        }
         let (downType, upType): (NSEvent.EventType, NSEvent.EventType) =
             button == .right ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
         for clickCount in 1...max(1, count) {
             if clickCount > 1 { try? await Task.sleep(for: .milliseconds(10)) }
             guard
-                let down = mouseEvent(downType, at: location, clickCount: clickCount, modifiers: modifiers),
-                let up = mouseEvent(upType, at: location, clickCount: clickCount, modifiers: modifiers)
+                let down = mouseEvent(
+                    downType, at: location, in: target, clickCount: clickCount, modifiers: modifiers),
+                let up = mouseEvent(upType, at: location, in: target, clickCount: clickCount, modifiers: modifiers)
             else { continue }
             NSApp.postEvent(up, atStart: false)
-            window.sendEvent(down)
+            target.sendEvent(down)
         }
     }
 
     private func mouseEvent(
-        _ type: NSEvent.EventType, at location: NSPoint, clickCount: Int, modifiers: KeyModifiers
+        _ type: NSEvent.EventType, at location: NSPoint, in target: NSWindow? = nil, clickCount: Int,
+        modifiers: KeyModifiers
     ) -> NSEvent? {
         NSEvent.mouseEvent(
             with: type, location: location, modifierFlags: modifiers.flags,
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: (target ?? window).windowNumber,
+            context: nil,
             eventNumber: Self.nextEventNumber(), clickCount: clickCount,
             pressure: type == .leftMouseDown || type == .rightMouseDown ? 1 : 0)
     }

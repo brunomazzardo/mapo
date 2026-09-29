@@ -43,7 +43,7 @@ See the Deviations table below. The main ones:
 ### Blockers
 - ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing it leaves focus on the terminal. Next idea: identify the find field, and check how Escape is delivered to an inactive window.
 - Switch p95 over budget on Release: re-measure with the display awake before tuning. The sample shows an idle main thread, so the time is waiting (the daemon round trip and throttled frames of an occluded window).
-- `ui.click` can't reach sheet buttons, so drives use `ui.press`. A subscriber cut off for falling behind now has its connection closed, so the app reconnects and takes a fresh snapshot. That path is not driven; the ring's cut-off has a unit test.
+- `ui.click` now reaches sheets and child panels (fixed 04:15; Save All clicked in the quit sheet saves and quits). A subscriber cut off for falling behind now has its connection closed, so the app reconnects and takes a fresh snapshot. That path is not driven; the ring's cut-off has a unit test.
 
 ### Needs the user
 Details in the list below:
@@ -156,7 +156,7 @@ T5.1 second pass, with the display awake: re-measure switch and reattach on Rele
 - **T1.10 done: M1 gate PASS.** `just drive m1-daily` PASS 16/16 (8 steps), evidence `evidence/m1-daily/20260929-031518`.
   - Measured: launch 430 ms and relaunch 430 ms (Debug; budget 400 in release), pane.split 10 ms, workspace-switch p95 29 ms (budget 50), daemon reconnect 233 ms, app.reattach after a daemon restart 273 ms (budget 150; the span includes reconnect backoff), footprints daemon 12 MB and app 97 MB.
   - Fixed on the way: ⌘Q through `ui.key` ran the quit inside the automation handler, so the unsaved-files sheet's modal loop blocked every later `ui.*` call. The quit now runs on the next run-loop turn.
-  - Open: focus after closing Find or Go to Line moves to another pane; `ui.click` doesn't reach sheet buttons (use `ui.press`).
+  - Open: focus after closing Find or Go to Line moves to another pane. (`ui.click` into sheets was fixed later.)
 - **T1.6 to T1.9 done** (written by subagents; two of them died at 02:04 on the shared usage limit, and the coordinator finished their work after 03:00). Every drive passes on one integration build, and so do all the M0 and T1.1–T1.5 drives:
   - **T1.6 editor:**
     - `task-t1-6` 12/12, `evidence/task-t1-6/20260929-030640`.

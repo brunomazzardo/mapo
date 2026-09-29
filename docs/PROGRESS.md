@@ -41,7 +41,7 @@ See the Deviations table below. The main ones:
 - `strip = "none"` in the release profile (Xcode 27's `strip` corrupts proc-macro dylibs).
 
 ### Blockers
-- ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing it leaves focus on the terminal. Next idea: identify the find field, and check how Escape is delivered to an inactive window.
+- ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing the find bar leaves focus on the terminal pane. Isolated at 04:11: Escape in the editor itself keeps focus and typing into the find field works, so closing the bar is what hands focus to another key view. A `NSScrollView.isFindBarVisible` override didn't catch it and was reverted. Next idea: set the text view's `nextKeyView` to itself (or observe `NSTextFinder`'s `findBarContainer` through a custom container object), and give the find field an identifier. ⌘L shows no `editor.goToLine` element either.
 - Switch p95 over budget on Release: re-measure with the display awake before tuning. The sample shows an idle main thread, so the time is waiting (the daemon round trip and throttled frames of an occluded window).
 - `ui.click` now reaches sheets and child panels (fixed 04:15; Save All clicked in the quit sheet saves and quits). A subscriber cut off for falling behind now has its connection closed, so the app reconnects and takes a fresh snapshot. That path is not driven; the ring's cut-off has a unit test.
 

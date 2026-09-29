@@ -178,6 +178,7 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
 
     let mut stop = shared.shutdown.subscribe();
     let mut subscribe_task: Option<tokio::task::JoinHandle<()>> = None;
+    let cut_off = Arc::new(tokio::sync::Notify::new());
     let conn_id = shared
         .next_conn
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -187,6 +188,8 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
         let line = tokio::select! {
             line = read_line(&mut reader) => line,
             _ = stop.changed() => break,
+            // A subscriber that fell behind was cut off: close, so the client resyncs on reconnect.
+            _ = cut_off.notified() => break,
         };
         match line {
             Ok(Line::Text(text)) if text.trim().is_empty() => continue,
@@ -195,11 +198,10 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
                     let _ = tx.send(encode(&super::fs::watch(&shared, &watches, req)));
                 }
                 Ok(Incoming::Request(req)) if req.method == methods::EVENTS_SUBSCRIBE => {
-                    let (shared, tx) = (shared.clone(), tx.clone());
-                    subscribe_task =
-                        Some(tokio::spawn(
-                            async move { subscribe(&shared, &req, &tx).await },
-                        ));
+                    let (shared, tx, cut) = (shared.clone(), tx.clone(), cut_off.clone());
+                    subscribe_task = Some(tokio::spawn(async move {
+                        subscribe(&shared, &req, &tx, &cut).await
+                    }));
                 }
                 Ok(Incoming::Request(req)) if req.method == "app.register" => {
                     let resp = if session.role == mapo_protocol::hello::Role::App
@@ -427,7 +429,7 @@ async fn hello(
 }
 
 /// Streams events after the `events.subscribe` response, until the connection or daemon ends.
-async fn subscribe(shared: &Shared, req: &Request, tx: &Tx) {
+async fn subscribe(shared: &Shared, req: &Request, tx: &Tx, cut_off: &tokio::sync::Notify) {
     let params = match parse_params::<mapo_protocol::types::SubscribeParams>(&req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -464,6 +466,7 @@ async fn subscribe(shared: &Shared, req: &Request, tx: &Tx) {
                 }
                 Some(Err(e)) => {
                     let _ = tx.send(encode(&Response::err(None, e)));
+                    cut_off.notify_one();
                     return;
                 }
                 None => return,

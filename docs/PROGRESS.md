@@ -43,7 +43,7 @@ See the Deviations table below. The main ones:
 ### Blockers
 - ⌘F and ⌘L in the editor while the window is inactive: the find field isn't in `ui.tree`, and closing it leaves focus on the terminal. Next idea: identify the find field, and check how Escape is delivered to an inactive window.
 - Switch p95 over budget on Release: re-measure with the display awake before tuning. The sample shows an idle main thread, so the time is waiting (the daemon round trip and throttled frames of an occluded window).
-- `ui.click` can't reach sheet buttons, so drives use `ui.press`. A mid-stream `cursor_expired` is sent with a null id, and the app ignores it.
+- `ui.click` can't reach sheet buttons, so drives use `ui.press`. A subscriber cut off for falling behind now has its connection closed, so the app reconnects and takes a fresh snapshot. That path is not driven; the ring's cut-off has a unit test.
 
 ### Needs the user
 Details in the list below:

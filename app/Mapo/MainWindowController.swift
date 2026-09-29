@@ -1,4 +1,5 @@
 import AppKit
+import MapoAutomation
 import MapoClient
 import MapoTerminal
 import MapoUI
@@ -7,15 +8,18 @@ import MapoUI
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let client: MapoClient
     private let instance: String
+    private let metrics: UIMetrics
     private var paneArea: PaneAreaViewController?
 
+    private static let titleItem = NSToolbarItem.Identifier("toolbar.title")
     private static let railToggleItem = NSToolbarItem.Identifier("rail.toggle")
     private static let newWorkspaceItem = NSToolbarItem.Identifier("rail.newWorkspace")
     private static let inspectorItem = NSToolbarItem.Identifier("toolbar.inspector")
 
-    init(client: MapoClient, registry: SurfaceRegistry) {
+    init(client: MapoClient, registry: SurfaceRegistry, metrics: UIMetrics) {
         self.client = client
         self.instance = client.store.instance
+        self.metrics = metrics
         let window = MapoWindow()
         super.init(window: window)
 
@@ -23,9 +27,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             store: client.store,
             actions: RailActions(
                 activateWorkspace: { [weak self] id in
+                    self?.metrics.beginWorkspaceSwitch(to: id)
                     self?.run("workspace.activate") { try await $0.activateWorkspace(id: id) }
                 },
                 focusTab: { [weak self] id in
+                    self?.metrics.beginTabFocus(id)
                     self?.run("tab.focus") { client in
                         try await client.focusTab(id: id)
                         self?.paneArea?.focusTerminal()
@@ -65,15 +71,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private func updateTitle() {
         let name = client.store.activeWorkspace?.name ?? "Mapo"
         window?.title = instance == "main" ? name : "\(name) (\(instance))"
+        window?.setAccessibilityLabel(window?.title)
     }
 
     // MARK: Commands (UX §8)
 
     func newWorkspace() {
+        metrics.beginWorkspaceCreate()
         run("New Workspace") { try await $0.newWorkspace() }
     }
 
     func newShellTab() {
+        metrics.beginTabCreate()
         run("New Shell Tab") { try await $0.newShellTab() }
     }
 
@@ -100,8 +109,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
-            .flexibleSpace, Self.railToggleItem, Self.newWorkspaceItem, .sidebarTrackingSeparator, .flexibleSpace,
-            Self.inspectorItem, .inspectorTrackingSeparator,
+            .flexibleSpace, Self.railToggleItem, Self.newWorkspaceItem, .sidebarTrackingSeparator, Self.titleItem,
+            .flexibleSpace, Self.inspectorItem, .inspectorTrackingSeparator,
         ]
     }
 
@@ -114,6 +123,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
         switch itemIdentifier {
+        case Self.titleItem:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.view = ToolbarTitleView(store: client.store)
+            item.label = "Workspace"
+            item.isBordered = false
+            return item
         case Self.railToggleItem:
             return button(
                 itemIdentifier, symbol: "sidebar.left", label: "Toggle Sidebar", tooltip: "Hide Sidebar (⌃⌘S)",
@@ -136,9 +151,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         axid: String
     ) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
+        // The split view controller handles the sidebar and inspector toggles. Targeting it directly, not the
+        // responder chain, keeps the buttons working while the app is inactive and `ui click` drives them.
+        let splitViewController = window?.contentViewController as? NSSplitViewController
+        let target: AnyObject? = splitViewController?.responds(to: action) == true ? splitViewController : nil
         let button = NSButton(
             image: NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage(),
-            target: nil, action: action)
+            target: target, action: action)
         button.bezelStyle = .toolbar
         button.toolTip = tooltip
         button.setAXIdentifier(axid)

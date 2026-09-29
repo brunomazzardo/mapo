@@ -35,5 +35,6 @@ let package = Package(
             swiftSettings: mainActorDefault),
         .testTarget(name: "MapoProtocolTests", dependencies: ["MapoProtocol"]),
         .testTarget(name: "MapoTerminalTests", dependencies: ["MapoTerminal"]),
+        .testTarget(name: "MapoAutomationTests", dependencies: ["MapoAutomation"]),
     ]
 )

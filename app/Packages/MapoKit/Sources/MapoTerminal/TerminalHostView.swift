@@ -7,6 +7,10 @@ nonisolated public enum TerminalConnection: Equatable, Sendable {
     case disconnected(exitCode: Int32?)
 }
 
+/// A tab name's identifiers: the surface (`pane.terminal:<tabName>`) and its Reconnect button
+/// (`pane.reconnect:<tabName>`).
+public typealias TerminalIdentifiers = (_ tabName: String) -> (terminal: String, reconnect: String)
+
 /// The body of a terminal pane: one tab's current surface plus the "Disconnected" scrim (UX §4.3).
 ///
 /// This view outlives its surfaces. Reconnect replaces the surface, which replays from the daemon; the
@@ -34,14 +38,22 @@ public final class TerminalHostView: NSView {
     public var onConnectionChange: ((TerminalConnection) -> Void)?
 
     private let makeSurface: () -> any TerminalSurface
+    private let identifiers: TerminalIdentifiers
     private let scrim = DisconnectedScrim()
     private var isVisible = true
     private var refocusAfterMove = false
 
-    /// - Parameter makeSurface: builds a fresh surface for this tab; called now and on every reconnect.
-    public init(tabId: String, tabName: String, makeSurface: @escaping () -> any TerminalSurface) {
+    /// - Parameters:
+    ///   - identifiers: the surface's and the Reconnect button's identifiers for a tab name, from MapoUI's
+    ///     `AXID`, the only place identifier strings are built (ENGINEERING §4.2).
+    ///   - makeSurface: builds a fresh surface for this tab; called now and on every reconnect.
+    public init(
+        tabId: String, tabName: String, identifiers: @escaping TerminalIdentifiers,
+        makeSurface: @escaping () -> any TerminalSurface
+    ) {
         self.tabId = tabId
         self.tabName = tabName
+        self.identifiers = identifiers
         self.makeSurface = makeSurface
         self.surface = makeSurface()
         super.init(frame: .zero)
@@ -153,12 +165,14 @@ public final class TerminalHostView: NSView {
 
     private func updateAccessibility() {
         let view = surface.view
-        view.setAccessibilityIdentifier("pane.terminal:\(tabName)")
+        let ids = identifiers(tabName)
+        view.setAccessibilityIdentifier(ids.terminal)
         let state = connection == .connected ? "connected" : "disconnected"
         view.setAccessibilityLabel("\(title ?? tabName), \(state)")
         // AppKit exposes the button's cell as its accessibility element, so the cell needs the identifier too.
-        scrim.button.setAccessibilityIdentifier("pane.reconnect:\(tabName)")
-        scrim.button.cell?.setAccessibilityIdentifier("pane.reconnect:\(tabName)")
+        scrim.button.setAccessibilityIdentifier(ids.reconnect)
+        scrim.button.cell?.setAccessibilityIdentifier(ids.reconnect)
+        scrim.button.setAccessibilityLabel("Reconnect \(tabName)")
     }
 
     private func showScrim() {

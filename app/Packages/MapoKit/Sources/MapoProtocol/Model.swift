@@ -14,6 +14,7 @@ public enum Method {
     public static let workspaceActivate = "workspace.activate"
     public static let tabCreate = "tab.create"
     public static let tabFocus = "tab.focus"
+    public static let appRegister = "app.register"
     /// The notification that carries an `Event`.
     public static let event = "event"
 }
@@ -513,5 +514,15 @@ public struct TabSelector: Codable, Hashable, Sendable {
     public init(tab: String, workspace: String? = nil) {
         self.tab = tab
         self.workspace = workspace
+    }
+}
+
+/// `app.register` (PROTOCOL §6.8): the app offers `ui` so the daemon routes `ui.*` to it.
+public struct AppRegisterParams: Codable, Hashable, Sendable {
+    public var capabilities: [String]
+    public var version: String
+    public init(capabilities: [String], version: String) {
+        self.capabilities = capabilities
+        self.version = version
     }
 }

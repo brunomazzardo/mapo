@@ -15,12 +15,17 @@ public final class MapoClient {
         public var spawnDaemon: Bool
         /// `client` in `hello`, such as "Mapo/0.1.0".
         public var clientName: String
+        /// `version` in `app.register`: the bundle's short version.
+        public var version: String
 
-        public init(instance: InstanceInfo, helper: MapoHelper, spawnDaemon: Bool, clientName: String) {
+        public init(
+            instance: InstanceInfo, helper: MapoHelper, spawnDaemon: Bool, clientName: String, version: String
+        ) {
             self.instance = instance
             self.helper = helper
             self.spawnDaemon = spawnDaemon
             self.clientName = clientName
+            self.version = version
         }
     }
 
@@ -167,6 +172,7 @@ public final class MapoClient {
         }
         store.connection = .connected(bootId: hello.bootId)
         log.info("connected bootId=\(hello.bootId) instance=\(hello.instance) daemon=\(hello.daemon)")
+        await register(connection)
         for await notification in connection.notifications {
             switch notification {
             case .event(let event):
@@ -258,6 +264,20 @@ public final class MapoClient {
         forceSnapshot = false
         log.info(
             "snapshot seq=\(snapshot.seq) workspaces=\(snapshot.workspaces.count) tabs=\(snapshot.tabs.count)")
+    }
+
+    /// `app.register` after every connect (PLAN T0.9), offering `ui` when a request handler serves it, so the
+    /// daemon routes `ui.*` here. A failure only costs automation, so it is logged, not fatal.
+    private func register(_ connection: MapoConnection) async {
+        let capabilities = requestHandler == nil ? [] : ["ui"]
+        do {
+            _ = try await connection.request(
+                Method.appRegister, AppRegisterParams(capabilities: capabilities, version: configuration.version),
+                as: EmptyObject.self)
+            log.info("registered capabilities=\(capabilities.joined(separator: ","))")
+        } catch {
+            log.warn("app.register failed: \(error)")
+        }
     }
 
     private func subscribe(_ connection: MapoConnection) async throws -> EventsSubscribeResult {

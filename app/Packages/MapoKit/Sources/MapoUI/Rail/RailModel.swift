@@ -209,3 +209,33 @@ enum RailModel {
         return path
     }
 }
+
+/// `ui.snapshot.model.rail` (UX §3.8): the workspace and tab rows in display order, so drives can check what
+/// the rail renders without pixels.
+public enum RailSnapshot {
+    public static func rows(_ store: AppStore) -> [JSONValue] {
+        RailModel.rows(store).compactMap { row in
+            guard let id = row.modelId else { return nil }
+            let accessory = row.accessory.snapshotValue.map(JSONValue.string) ?? .null
+            switch row.kind {
+            case .workspace(let expanded, _):
+                var members: [String: JSONValue] = [
+                    "kind": .string("workspace"), "id": .string(id), "name": .string(row.text),
+                    "expanded": .bool(expanded),
+                    "state": .string(row.state.rawValue), "accessory": accessory,
+                ]
+                if let branch = row.secondaryText, !branch.isEmpty { members["branch"] = .string(branch) }
+                return .object(members)
+            case .tab(let icon, let selected):
+                guard let tab = store.tabs[id] else { return nil }
+                return .object([
+                    "kind": .string("tab"), "id": .string(id), "workspaceId": .string(tab.workspaceId),
+                    "name": .string(tab.name), "display": .string(row.text), "icon": .string(icon.rawValue),
+                    "state": .string(row.state.rawValue), "accessory": accessory, "selected": .bool(selected),
+                ])
+            default:
+                return nil
+            }
+        }
+    }
+}

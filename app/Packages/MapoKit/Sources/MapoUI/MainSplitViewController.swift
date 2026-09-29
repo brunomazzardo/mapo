@@ -15,6 +15,10 @@ public final class MainSplitViewController: NSSplitViewController {
         self.inspector = inspector
         self.instance = instance
         super.init(nibName: nil, bundle: nil)
+        let split = MainSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+        splitView = split
     }
 
     @available(*, unavailable)
@@ -40,5 +44,24 @@ public final class MainSplitViewController: NSSplitViewController {
 
         for item in [railItem, panesItem, inspectorItem] { addSplitViewItem(item) }
         splitView.autosaveName = "split-\(instance)"
+    }
+}
+
+/// The window's split view. Its dividers are `splitter` elements in `ui.tree`, which AppKit vends without
+/// identifiers; this names them `window.divider:rail` and `window.divider:inspector` (UX §2.4).
+final class MainSplitView: NSSplitView {
+    override func accessibilityChildren() -> [Any]? {
+        guard let children = super.accessibilityChildren() else { return nil }
+        let splitters =
+            children
+            .compactMap { $0 as? NSObject & NSAccessibilityProtocol }
+            .filter { $0.accessibilityRole() == .splitter }
+            .sorted { $0.accessibilityFrame().minX < $1.accessibilityFrame().minX }
+        let names = [AXID.windowDividerRail, AXID.windowDividerInspector]
+        for (splitter, name) in zip(splitters, names) {
+            splitter.setAccessibilityIdentifier(name)
+            splitter.setAccessibilityLabel(name == AXID.windowDividerRail ? "Sidebar Divider" : "Inspector Divider")
+        }
+        return children
     }
 }

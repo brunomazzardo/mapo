@@ -5,18 +5,30 @@ import AppKit
 public final class SurfaceRegistry {
     public let settings: TerminalSettings
     private let launch: (_ tabId: String) -> TerminalLaunch
+    private let identifiers: TerminalIdentifiers
     private var hosts: [String: TerminalHostView] = [:]
 
-    /// - Parameter launch: the process for a tab's surface, normally `TerminalLaunch.attach`.
-    public init(settings: TerminalSettings, launch: @escaping (_ tabId: String) -> TerminalLaunch) {
+    /// - Parameters:
+    ///   - identifiers: the terminal identifiers for a tab name (`AXID` in MapoUI).
+    ///   - launch: the process for a tab's surface, normally `TerminalLaunch.attach`.
+    public init(
+        settings: TerminalSettings, identifiers: @escaping TerminalIdentifiers,
+        launch: @escaping (_ tabId: String) -> TerminalLaunch
+    ) {
         self.settings = settings
+        self.identifiers = identifiers
         self.launch = launch
     }
 
     /// The registry the app uses: every surface runs `<APP>/Contents/Helpers/mapo attach`.
-    public convenience init(settings: TerminalSettings, instance: String, bundle: Bundle = .main) {
+    public convenience init(
+        settings: TerminalSettings, instance: String, identifiers: @escaping TerminalIdentifiers,
+        bundle: Bundle = .main
+    ) {
         let helper = TerminalLaunch.helperURL(in: bundle)
-        self.init(settings: settings) { TerminalLaunch.attach(helper: helper, tabId: $0, instance: instance) }
+        self.init(settings: settings, identifiers: identifiers) {
+            TerminalLaunch.attach(helper: helper, tabId: $0, instance: instance)
+        }
     }
 
     public var tabIds: [String] { Array(hosts.keys) }
@@ -31,7 +43,7 @@ public final class SurfaceRegistry {
             if host.tabName != tabName { host.tabName = tabName }
             return host
         }
-        let host = TerminalHostView(tabId: tabId, tabName: tabName) { [unowned self] in
+        let host = TerminalHostView(tabId: tabId, tabName: tabName, identifiers: identifiers) { [unowned self] in
             self.makeSurface(tabId: tabId)
         }
         hosts[tabId] = host

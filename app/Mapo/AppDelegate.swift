@@ -1,4 +1,5 @@
 import AppKit
+import MapoAutomation
 import MapoClient
 import MapoTerminal
 import MapoUI
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let log = MapoLog.shared
     private var client: MapoClient?
     private var registry: SurfaceRegistry?
+    private var automation: AutomationServer?
     private var windowController: MainWindowController?
     private var pidFile: PidFile?
     private var signalSources: [DispatchSourceSignal] = []
@@ -58,12 +60,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let client = MapoClient(
             configuration: .init(
-                instance: info, helper: helper, spawnDaemon: options.spawnDaemon, clientName: "Mapo/\(version)"))
+                instance: info, helper: helper, spawnDaemon: options.spawnDaemon, clientName: "Mapo/\(version)",
+                version: version))
         let registry = SurfaceRegistry(
-            settings: TerminalSettings(instanceDirectory: info.dataDirectory), instance: info.name)
-        let windowController = MainWindowController(client: client, registry: registry)
+            settings: TerminalSettings(instanceDirectory: info.dataDirectory), instance: info.name,
+            identifiers: AXID.terminal)
+        let metrics = UIMetrics(store: client.store) { [weak self] in self?.windowController?.window }
+        let windowController = MainWindowController(client: client, registry: registry, metrics: metrics)
+        // `ui.*` from the daemon (PLAN T0.9); set before connecting so `app.register` offers `ui`.
+        let automation = AutomationServer(store: client.store, metrics: metrics) { [weak windowController] in
+            windowController?.window
+        }
+        client.requestHandler = { request in await automation.handle(request) }
         self.client = client
         self.registry = registry
+        self.automation = automation
         self.windowController = windowController
         windowController.showWindow(nil)
         NSApp.activate()

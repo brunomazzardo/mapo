@@ -269,9 +269,9 @@ Every interactive element has one of these identifiers (R-NF-5), or one that [UX
 
 | Area | Identifiers |
 |---|---|
-| Window, toolbar | `window.main`, `toolbar.title`, `toolbar.splitRight`, `toolbar.splitDown`, `toolbar.palette`, `toolbar.inspector` |
+| Window, toolbar | `window.main`, `window.divider:rail`, `window.divider:inspector`, `toolbar.title`, `toolbar.splitRight`, `toolbar.splitDown`, `toolbar.palette`, `toolbar.inspector` |
 | Rail | `rail`, `rail.toggle`, `rail.newWorkspace`, `rail.workspace:<workspaceName>`, `rail.workspace.badge:<workspaceName>`, `rail.tab:<workspaceName>/<tabName>` |
-| Panes | `pane:<paneId>`, `pane.header:<tabName>`, `pane.terminal:<tabName>`, `pane.file:<absPath>`, `pane.diff:<absPath>`, `pane.stop:<tabName>`, `pane.close:<paneId>` |
+| Panes | `pane:<paneId>`, `pane.empty.newShell`, `pane.header:<tabName>`, `pane.terminal:<tabName>`, `pane.file:<absPath>`, `pane.diff:<absPath>`, `pane.stop:<tabName>`, `pane.close:<paneId>` |
 | Inspector | `inspector`, `inspector.segment:files`, `inspector.segment:changes`, `inspector.files.header`, `inspector.files.row:<relPath>`, `inspector.changes.summary`, `inspector.changes.row:<relPath>` |
 | Palette | `palette`, `palette.field`, `palette.row:<index>` (zero-based, display order) |
 | Editor, dialogs | `editor:<absPath>`, `dialog`, `dialog.confirm`, `dialog.cancel` |

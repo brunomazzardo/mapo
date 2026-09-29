@@ -95,6 +95,10 @@ impl AppRoute {
         }
         match result {
             Ok(Ok(resp)) => resp.into_result(),
+            // An input that quits the app (⌘Q) did its job even though nobody is left to answer.
+            Ok(Err(_)) if matches!(method, "ui.key" | "ui.click" | "ui.press") => {
+                Ok(json!({ "ok": true, "appDisconnected": true }))
+            }
             Ok(Err(_)) => Err(RpcError::unavailable("the app disconnected")),
             Err(_) => Err(RpcError::new(
                 mapo_protocol::ErrorKind::Timeout,
@@ -220,6 +224,10 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     }
     if let Some(task) = subscribe_task {
         task.abort();
+    }
+    if let Ok(mut p) = pending.lock() {
+        // Dropping the senders fails any ui.* call still waiting on this app.
+        p.clear();
     }
     if session.role == mapo_protocol::hello::Role::App {
         if let Ok(mut app) = shared.app.lock()

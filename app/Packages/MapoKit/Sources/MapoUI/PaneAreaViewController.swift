@@ -103,7 +103,10 @@ public final class PaneAreaViewController: NSViewController {
         if let tabId = pane.content.tabId, let tab = store.tabs[tabId] {
             placeholder.show(.none)
             show(host: registry.host(for: tab.id, tabName: tab.name))
-            card.setAccessibilityLabel(tab.name)
+            // The pane speaks its tab and state, such as "terminal-1, running" (ENGINEERING §4.2 rule 4).
+            let state = tab.stateLabel.isEmpty ? tab.state.rawValue : tab.stateLabel.lowercased()
+            card.setAccessibilityLabel("\(tab.name), \(state)")
+            card.setAccessibilityValue(tab.state.rawValue)
             return
         }
         show(host: nil)
@@ -289,7 +292,7 @@ final class PlaceholderView: NSView {
             detail.stringValue = "Or choose a tab in the sidebar."
             detail.isHidden = false
             button.superview?.isHidden = false
-            button.setAXIdentifier(paneId.map(AXID.paneEmptyNewShell))
+            button.setAXIdentifier(AXID.paneEmptyNewShell(paneId))
         }
     }
 

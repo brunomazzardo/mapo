@@ -39,6 +39,10 @@ const DEFAULT_ROWS: u16 = 24;
 const TITLE_INTERVAL: Duration = Duration::from_millis(250);
 /// Without shell integration, launch commands go out after this long.
 const NO_INTEGRATION_AFTER: Duration = Duration::from_secs(3);
+/// How long a prompt that typeahead is waiting behind stays non-idle.
+const TYPEAHEAD_SETTLE: Duration = Duration::from_millis(250);
+/// Waits re-check at least this often, so time-based conditions resolve.
+const WAIT_RECHECK: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy)]
 struct Size {
@@ -117,6 +121,10 @@ struct State {
     in_command: bool,
     /// An executed send waits for its prompt to go away.
     pending_exec: bool,
+    /// A send made while a command ran: at the next prompt it becomes typeahead.
+    busy_send: bool,
+    /// After that prompt, stay non-idle briefly so typeahead can start (its 133;C clears this).
+    settle_until: Option<Instant>,
     last_send: Option<SendMark>,
     /// The last command's boundaries: (C offset, D offset, exit code).
     last_command: Option<(u64, Option<u64>, Option<i32>)>,
@@ -267,6 +275,8 @@ pub fn launch(spec: &LaunchSpec, ctx: &Arc<HostContext>) -> Option<TabHandle> {
         at_prompt: false,
         in_command: false,
         pending_exec: false,
+        busy_send: false,
+        settle_until: None,
         last_send: None,
         last_command: None,
         exit: None,
@@ -390,6 +400,10 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
                             // A prompt came back without a command: an empty line or a builtin.
                         }
                         st.pending_exec = false;
+                        if st.busy_send {
+                            st.busy_send = false;
+                            st.settle_until = Some(Instant::now() + TYPEAHEAD_SETTLE);
+                        }
                         CoreMark::PromptStart
                     }
                     Mark::B => CoreMark::PromptEnd,
@@ -397,6 +411,7 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
                         st.at_prompt = false;
                         st.in_command = true;
                         st.pending_exec = false;
+                        st.settle_until = None;
                         if let Some(s) = st.last_send.as_mut()
                             && s.command_start.is_none()
                         {
@@ -521,6 +536,8 @@ impl TabHandle {
             });
             if execute && at_prompt {
                 st.pending_exec = true;
+            } else if execute && st.integrated && !text.trim().is_empty() {
+                st.busy_send = true;
             }
         }
         if !self.write(&bytes).await {
@@ -530,7 +547,12 @@ impl TabHandle {
     }
 
     fn is_idle(st: &State) -> bool {
-        st.integrated && st.at_prompt && !st.pending_exec && !st.in_command
+        st.integrated
+            && st.at_prompt
+            && !st.pending_exec
+            && !st.busy_send
+            && !st.in_command
+            && st.settle_until.is_none_or(|t| Instant::now() >= t)
     }
 
     /// `tab.wait --until idle`: the shell sits at a prompt.
@@ -589,9 +611,11 @@ impl TabHandle {
             if let Some(r) = check(&lock(&self.inner)) {
                 return r;
             }
-            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            if tokio::time::Instant::now() >= deadline {
                 return Err(timeout_error(what, timeout.as_millis() as u64));
             }
+            let wake = deadline.min(tokio::time::Instant::now() + WAIT_RECHECK);
+            let _ = tokio::time::timeout_at(wake, notified).await;
         }
     }
 

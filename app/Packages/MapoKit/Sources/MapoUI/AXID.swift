@@ -8,7 +8,10 @@ public enum AXID {
     public static let railToggle = "rail.toggle"
     public static let railNewWorkspace = "rail.newWorkspace"
     public static let railEmptyNewWorkspace = "rail.empty.newWorkspace"
+    public static let toolbarTitle = "toolbar.title"
     public static let toolbarInspector = "toolbar.inspector"
+    public static let windowDividerRail = "window.divider:rail"
+    public static let windowDividerInspector = "window.divider:inspector"
     public static let inspector = "inspector"
     public static let appBanner = "app.banner"
     public static let appBannerAction = "app.banner.action"
@@ -33,9 +36,25 @@ public enum AXID {
         "pane:\(paneId)"
     }
 
-    /// `pane.empty.newShell:<paneId>`.
-    public static func paneEmptyNewShell(_ paneId: String) -> String {
-        "pane.empty.newShell:\(paneId)"
+    /// `pane.terminal:<tabName>`.
+    public static func paneTerminal(_ tabName: String) -> String {
+        "pane.terminal:\(tabName)"
+    }
+
+    /// `pane.reconnect:<tabName>`.
+    public static func paneReconnect(_ tabName: String) -> String {
+        "pane.reconnect:\(tabName)"
+    }
+
+    /// The identifiers `SurfaceRegistry` puts on a tab's surface and on its Reconnect button.
+    public static func terminal(_ tabName: String) -> (terminal: String, reconnect: String) {
+        (paneTerminal(tabName), paneReconnect(tabName))
+    }
+
+    /// `pane.empty.newShell:<paneId>`, or `pane.empty.newShell` in a workspace that has no layout yet (no tabs,
+    /// so no pane id).
+    public static func paneEmptyNewShell(_ paneId: String?) -> String {
+        paneId.map { "pane.empty.newShell:\($0)" } ?? "pane.empty.newShell"
     }
 
     /// Rule 2: `%` becomes `%25` first, then `/` becomes `%2F`, so the separator stays unambiguous.

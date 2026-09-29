@@ -42,6 +42,7 @@ fn tab() -> TabSummary {
         pane_id: Some(PANE.into()),
         last_exit: None,
         launch_error: None,
+        agent: None,
     }
 }
 

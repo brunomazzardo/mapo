@@ -18,7 +18,8 @@ print -r -- "{\"rc\":$rc}" | expect_json .rc 3
 step "The environment is Mapo's, with no leaked session markers"
 mapo tab run t1 env | jq -r .output > "$DRIVE_TMP/env.txt"
 grep -cE '^(MAPO_INSTANCE|MAPO_TAB_ID|MAPO_TOKEN|TERM_PROGRAM)=' "$DRIVE_TMP/env.txt" | jq -R '{n: tonumber}' | expect_json .n 4
-grep -c '^CLAUDE' "$DRIVE_TMP/env.txt" | jq -R '{n: tonumber}' | expect_json .n 0 || true
+# Only Mapo's own plugin variable may start with CLAUDE (T2.1); every inherited marker is gone.
+{ grep '^CLAUDE' "$DRIVE_TMP/env.txt" | grep -v '^CLAUDE_CODE_PLUGIN_DIRS=' || true; } | wc -l | tr -d ' ' | jq -R '{n: tonumber}' | expect_json .n 0
 grep -E '^MAPO_INSTANCE=' "$DRIVE_TMP/env.txt" | cut -d= -f2 | jq -R . | expect_json . "\"$DRIVE_INSTANCE\""
 mapo tab run t1 'echo $PATH' | jq -r '.output | split(":")[0]' | jq -R . | expect_json 'endswith("target/debug") or endswith("Resources/bin")' true
 

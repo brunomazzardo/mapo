@@ -18,6 +18,8 @@ pub struct Facts {
     pub failed_exit: Option<i32>,
     /// A long command finished with 0 while nobody viewed the tab; clears once viewed (UX §7.4).
     pub done: bool,
+    /// Hook-driven agent status while an agent runs in the tab (R-AG-3); it wins over the shell's.
+    pub agent: Option<mapo_agent::Derived>,
 }
 
 pub fn status(f: &Facts) -> (State, String) {
@@ -29,6 +31,15 @@ pub fn status(f: &Facts) -> (State, String) {
     }
     if f.stopping {
         return (State::Stopping, "Stopping".into());
+    }
+    if let Some(agent) = f.agent {
+        use mapo_agent::Derived;
+        return match agent {
+            Derived::NeedsYou => (State::NeedsYou, "Needs you".into()),
+            Derived::Running => (State::Running, "Working".into()),
+            Derived::Done => (State::Done, "Done".into()),
+            Derived::Idle => (State::Idle, String::new()),
+        };
     }
     if f.spawning {
         return (State::Starting, "Starting".into());
@@ -115,6 +126,29 @@ mod tests {
             (
                 Facts {
                     done: true,
+                    ..Default::default()
+                },
+                (State::Done, "Done"),
+            ),
+            (
+                Facts {
+                    in_command: true,
+                    agent: Some(mapo_agent::Derived::NeedsYou),
+                    ..Default::default()
+                },
+                (State::NeedsYou, "Needs you"),
+            ),
+            (
+                Facts {
+                    in_command: true,
+                    agent: Some(mapo_agent::Derived::Running),
+                    ..Default::default()
+                },
+                (State::Running, "Working"),
+            ),
+            (
+                Facts {
+                    agent: Some(mapo_agent::Derived::Done),
                     ..Default::default()
                 },
                 (State::Done, "Done"),

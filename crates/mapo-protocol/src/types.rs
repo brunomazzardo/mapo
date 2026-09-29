@@ -79,6 +79,27 @@ pub struct TabSummary {
     pub last_exit: Option<LastExit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_error: Option<LaunchError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentInfo>,
+}
+
+/// Agent facts on a tab (PROTOCOL §7 `TabSummary.agent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInfo {
+    pub hooks_connected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub interrupted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceConfigure {
+    pub workspace: String,
+    #[serde(default)]
+    pub agent_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

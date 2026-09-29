@@ -10,7 +10,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::model::{Tab, Workspace};
 use crate::status::Facts;
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_agent_sessions.sql"),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -20,6 +23,8 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
 }
 
+// Writes are few and short-lived, so the size spread between variants doesn't matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Write {
     Workspace(Workspace),
@@ -100,7 +105,7 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
         });
     }
     let mut stmt = conn.prepare(
-        "SELECT id, workspace_id, name, labeled, kind, ord, cwd, launch_cwd, launch_command, agent_command
+        "SELECT id, workspace_id, name, labeled, kind, ord, cwd, launch_cwd, launch_command, agent_command, session_id
          FROM tabs ORDER BY workspace_id, ord",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -132,6 +137,11 @@ pub fn load(conn: &Connection) -> Result<Loaded, StoreError> {
             launch_error: None,
             program: None,
             command_started: None,
+            agent: None,
+            session_id: r.get(10)?,
+            tool_summary: None,
+            last_message: None,
+            command_line: None,
         })
     })?;
     for row in rows {
@@ -168,10 +178,10 @@ fn apply(conn: &Connection, w: &Write) -> Result<(), StoreError> {
         }
         Write::Tab(t) => {
             conn.execute(
-                "INSERT INTO tabs (id, workspace_id, name, labeled, kind, ord, cwd, launch_cwd, launch_command, agent_command)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO tabs (id, workspace_id, name, labeled, kind, ord, cwd, launch_cwd, launch_command, agent_command, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET workspace_id = ?2, name = ?3, labeled = ?4, kind = ?5, ord = ?6,
-                   cwd = ?7, launch_cwd = ?8, launch_command = ?9, agent_command = ?10",
+                   cwd = ?7, launch_cwd = ?8, launch_command = ?9, agent_command = ?10, session_id = ?11",
                 params![
                     t.id,
                     t.workspace_id,
@@ -182,7 +192,8 @@ fn apply(conn: &Connection, w: &Write) -> Result<(), StoreError> {
                     t.cwd,
                     t.launch.cwd,
                     t.launch.command,
-                    t.launch.agent_command
+                    t.launch.agent_command,
+                    t.session_id
                 ],
             )?;
         }

@@ -22,6 +22,7 @@ mapo-instance = { path = "crates/mapo-instance" }
 mapo-core = { path = "crates/mapo-core" }
 mapo-term = { path = "crates/mapo-term" }
 mapo-git = { path = "crates/mapo-git" }
+mapo-agent = { path = "crates/mapo-agent" }
 
 tokio = { version = "1.53", features = ["rt-multi-thread", "rt", "macros", "net", "io-util", "io-std", "sync", "time", "signal", "process", "fs"] }
 serde = { version = "1", features = ["derive"] }

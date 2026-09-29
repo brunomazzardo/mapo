@@ -33,6 +33,16 @@ pub struct Tab {
     pub program: Option<String>,
     /// When the running command's 133;C arrived.
     pub command_started: Option<std::time::Instant>,
+    /// Hook-fed agent state, from the first hook until the agent's command ends.
+    pub agent: Option<mapo_agent::AgentState>,
+    /// The Claude session to resume after a daemon restart (R-AG-7), persisted.
+    pub session_id: Option<String>,
+    /// What the agent waits on ("Approve: pnpm db:migrate"), kept only while it needs you.
+    pub tool_summary: Option<String>,
+    /// The last Stop's assistant message, held only while a `tab ask` waits (T3.3).
+    pub last_message: Option<String>,
+    /// The running (or last) command's line, from the preexec title.
+    pub command_line: Option<String>,
 }
 
 impl Tab {

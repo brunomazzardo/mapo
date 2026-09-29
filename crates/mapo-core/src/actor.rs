@@ -102,6 +102,8 @@ pub enum TabFact {
     Cwd(String),
     Title(String),
     Mark(Mark),
+    /// The command line of the command that just started (the preexec title), unthrottled.
+    CommandLine(String),
     Exited {
         code: i32,
         after_prompt: bool,
@@ -136,7 +138,14 @@ enum Msg {
     },
     Authenticate {
         token: String,
+        hook: bool,
         reply: oneshot::Sender<Option<Caller>>,
+    },
+    AgentSubmit {
+        tab_id: String,
+    },
+    AgentTick {
+        tab_id: String,
     },
     Resolve {
         tab: Option<String>,
@@ -186,6 +195,9 @@ impl CoreHandle {
                 | methods::UI_VISIBILITY
                 | methods::WORKSPACE_MOVE
                 | methods::TAB_MOVE
+                | methods::HOOK_REPORT
+                | methods::TAB_INTERRUPT
+                | methods::WORKSPACE_CONFIGURE
         )
     }
 
@@ -225,14 +237,41 @@ impl CoreHandle {
 
     /// The caller for a tab token (`MAPO_TOKEN`), if it belongs to a live tab.
     pub async fn authenticate_tab(&self, token: &str) -> Option<Caller> {
+        self.authenticate(token, false).await
+    }
+
+    /// The caller for a hook token (`MAPO_HOOK_TOKEN`): it may only report hooks for its own tab.
+    pub async fn authenticate_hook(&self, token: &str) -> Option<Caller> {
+        self.authenticate(token, true).await
+    }
+
+    async fn authenticate(&self, token: &str, hook: bool) -> Option<Caller> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Msg::Authenticate {
                 token: token.to_owned(),
+                hook,
                 reply,
             })
             .ok()?;
         rx.await.ok().flatten()
+    }
+
+    /// A prompt was sent to an agent tab: optimistic Working, reverted after 6 s without
+    /// UserPromptSubmit (FEATURE-MAP §5.1 `submit`).
+    pub fn agent_submit(&self, tab_id: &str) {
+        let _ = self.tx.send(Msg::AgentSubmit {
+            tab_id: tab_id.to_owned(),
+        });
+        let tx = self.tx.clone();
+        let tab_id = tab_id.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(
+                mapo_agent::machine::OPTIMISTIC_REVERT + std::time::Duration::from_millis(100),
+            )
+            .await;
+            let _ = tx.send(Msg::AgentTick { tab_id });
+        });
     }
 
     /// Resolves a tab selector the way every tab method does (PROTOCOL §5).
@@ -295,6 +334,8 @@ pub fn spawn(opts: Options<'_>) -> Result<CoreHandle, store::StoreError> {
         tokens: Default::default(),
         pane_mru: Default::default(),
         visibility: Visibility::default(),
+        hook_tokens: Default::default(),
+        attention: Default::default(),
     };
     if core
         .active
@@ -334,6 +375,10 @@ struct Core {
     /// Workspace id → recently focused pane ids, most recent last (R-LAY-3). Not persisted.
     pane_mru: std::collections::HashMap<String, Vec<String>>,
     visibility: Visibility,
+    /// Hook token → tab id (`MAPO_HOOK_TOKEN`), separate from tab tokens.
+    hook_tokens: std::collections::HashMap<String, String>,
+    /// Tabs counted by `attention.changed` last time: needs-you, failed and unviewed done.
+    attention: std::collections::BTreeSet<String>,
 }
 
 impl Core {
@@ -356,17 +401,50 @@ impl Core {
             }
             Msg::Emit { kind, data } => self.ring.push(&kind, data),
             Msg::Fact { tab_id, fact } => self.fact(&tab_id, fact),
-            Msg::Authenticate { token, reply } => {
-                let caller = self
-                    .tokens
+            Msg::Authenticate { token, hook, reply } => {
+                let table = if hook {
+                    &self.hook_tokens
+                } else {
+                    &self.tokens
+                };
+                let kind = if hook {
+                    CredentialKind::Hook
+                } else {
+                    CredentialKind::Tab
+                };
+                let caller = table
                     .get(&token)
                     .and_then(|id| self.tab_index(id))
                     .map(|t| Caller {
-                        kind: CredentialKind::Tab,
+                        kind,
                         tab_id: Some(self.tabs[t].id.clone()),
                         workspace_id: Some(self.tabs[t].workspace_id.clone()),
                     });
                 let _ = reply.send(caller);
+            }
+            Msg::AgentSubmit { tab_id } => {
+                if let Some(t) = self.tab_index(&tab_id) {
+                    let before = status(&self.tabs[t].facts);
+                    self.tabs[t]
+                        .agent
+                        .get_or_insert_with(Default::default)
+                        .submit(std::time::Instant::now());
+                    self.sync_agent(t);
+                    self.state_changed(t, before);
+                }
+            }
+            Msg::AgentTick { tab_id } => {
+                if let Some(t) = self.tab_index(&tab_id) {
+                    let before = status(&self.tabs[t].facts);
+                    let changed = self.tabs[t]
+                        .agent
+                        .as_mut()
+                        .is_some_and(|a| a.expire_optimistic(std::time::Instant::now()));
+                    if changed {
+                        self.sync_agent(t);
+                        self.state_changed(t, before);
+                    }
+                }
             }
             Msg::Resolve {
                 tab,
@@ -487,6 +565,28 @@ impl Core {
                 self.tabs[t].labeled = true;
                 self.touch_tab(t);
                 to_value(&self.tab_summary(&self.tabs[t]))
+            }
+            methods::HOOK_REPORT => self.hook_report(params, caller),
+            methods::TAB_INTERRUPT => {
+                // The daemon wrote ESC already; record it so late hooks can't flip the tab back.
+                let p: TabRef = parse_params(params)?;
+                let t = self.resolve_tab(p.tab.as_deref(), p.workspace.as_deref(), caller)?;
+                let before = status(&self.tabs[t].facts);
+                self.tabs[t]
+                    .agent
+                    .get_or_insert_with(Default::default)
+                    .interrupt();
+                self.sync_agent(t);
+                self.state_changed(t, before);
+                to_value(&self.tab_summary(&self.tabs[t]))
+            }
+            methods::WORKSPACE_CONFIGURE => {
+                let p: mapo_protocol::types::WorkspaceConfigure = parse_params(params)?;
+                let idx = self.find_workspace(&p.workspace)?;
+                self.workspaces[idx].agent_command =
+                    p.agent_command.filter(|c| !c.trim().is_empty());
+                self.touch_workspace(idx);
+                to_value(&self.ws_summary(&self.workspaces[idx]))
             }
             methods::WORKSPACE_MOVE => {
                 let p: mapo_protocol::types::WorkspaceMove = parse_params(params)?;
@@ -695,14 +795,30 @@ impl Core {
                 .launch_error
                 .as_ref()
                 .map(|e| e.message.clone())
+                .or_else(|| {
+                    (t.facts.agent == Some(mapo_agent::Derived::NeedsYou))
+                        .then(|| t.tool_summary.as_ref().map(|s| format!("Approve: {s}")))
+                        .flatten()
+                })
                 .or_else(|| crate::status::detail(&t.facts)),
-            status_source: "shell".into(),
+            status_source: if t.facts.agent.is_some() {
+                "hooks".into()
+            } else {
+                "shell".into()
+            },
             program: t.program.clone(),
             visible: (shown && self.active.as_deref() == Some(t.workspace_id.as_str()))
                 || self.visibility.visible.contains(&t.id),
             pane_id: pane.map(str::to_owned),
             last_exit: t.last_exit,
             launch_error: t.launch_error.clone(),
+            agent: (t.agent.is_some() || t.kind == TabKind::Agent).then(|| {
+                mapo_protocol::types::AgentInfo {
+                    hooks_connected: t.agent.as_ref().is_some_and(|a| a.hooks_connected),
+                    session_id: t.session_id.clone(),
+                    interrupted: t.agent.as_ref().is_some_and(|a| a.interrupted),
+                }
+            }),
         }
     }
 
@@ -941,6 +1057,11 @@ impl Core {
             launch_error: None,
             program: None,
             command_started: None,
+            agent: None,
+            session_id: None,
+            tool_summary: None,
+            last_message: None,
+            command_line: None,
         };
         self.tabs.push(tab);
         let t = self.tabs.len() - 1;
@@ -966,6 +1087,7 @@ impl Core {
         }
         let tab = self.tabs.remove(t);
         self.tokens.retain(|_, id| *id != tab.id);
+        self.hook_tokens.retain(|_, id| *id != tab.id);
         let _ = self.host.send(HostCmd::Close {
             tab_id: tab.id.clone(),
         });
@@ -1044,6 +1166,102 @@ impl Core {
                 self.ring.push("workspace.updated", json!(ws_summary));
             }
         }
+        self.refresh_attention();
+    }
+
+    /// The command an agent tab runs: its own, else its workspace's, else `claude` (R-AG-4).
+    fn agent_command(&self, t: usize) -> String {
+        let tab = &self.tabs[t];
+        tab.launch
+            .agent_command
+            .clone()
+            .or_else(|| {
+                self.ws_index(&tab.workspace_id)
+                    .and_then(|w| self.workspaces[w].agent_command.clone())
+            })
+            .unwrap_or_else(|| "claude".to_owned())
+    }
+
+    /// Copies the agent machine's derived state into the status facts.
+    fn sync_agent(&mut self, t: usize) {
+        let tab = &mut self.tabs[t];
+        tab.facts.agent = tab
+            .agent
+            .as_ref()
+            .filter(|a| a.hooks_connected || a.derived() == mapo_agent::Derived::Running)
+            .map(mapo_agent::AgentState::derived);
+        if tab.facts.agent != Some(mapo_agent::Derived::NeedsYou) {
+            tab.tool_summary = None;
+        }
+    }
+
+    /// Emits `attention.changed` when the set of tabs asking for attention changes (UX §7.3).
+    fn refresh_attention(&mut self) {
+        let now: std::collections::BTreeSet<String> = self
+            .tabs
+            .iter()
+            .filter(|t| {
+                matches!(
+                    status(&t.facts).0,
+                    State::NeedsYou | State::Failed | State::Done
+                )
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        if now != self.attention {
+            self.attention = now;
+            self.ring.push(
+                "attention.changed",
+                json!({ "count": self.attention.len(), "tabIds": self.attention.iter().collect::<Vec<_>>() }),
+            );
+        }
+    }
+
+    /// `hook.report` (PROTOCOL §6.7): only from the tab's own hook credential.
+    fn hook_report(&mut self, params: &Value, caller: &Caller) -> Result<Value, RpcError> {
+        let report: mapo_agent::HookReport = parse_params(params)?;
+        if caller.kind != CredentialKind::Hook {
+            return Err(RpcError::forbidden("hook.report needs a hook credential"));
+        }
+        let Some(t) = caller.tab_id.as_deref().and_then(|id| self.tab_index(id)) else {
+            return Err(RpcError::not_found("the hook's tab is gone"));
+        };
+        let Some(event) = mapo_agent::Event::parse(&report.event) else {
+            return Err(RpcError::invalid(format!(
+                "unknown hook event {}",
+                report.event
+            )));
+        };
+        let before = status(&self.tabs[t].facts);
+        let tab = &mut self.tabs[t];
+        let agent = tab.agent.get_or_insert_with(Default::default);
+        agent.receive(
+            event,
+            report.agent_id.as_deref().unwrap_or(""),
+            report.notification_type.as_deref(),
+            std::time::Instant::now(),
+        );
+        if event == mapo_agent::Event::PermissionRequest {
+            tab.tool_summary = report.tool_summary.clone();
+        }
+        if event == mapo_agent::Event::Stop {
+            tab.last_message = report.last_assistant_message.clone();
+        }
+        let mut persist = false;
+        if event == mapo_agent::Event::SessionStart
+            && let Some(sid) = report.session_id.clone()
+            && tab.session_id.as_ref() != Some(&sid)
+        {
+            tab.session_id = Some(sid);
+            persist = true;
+        }
+        self.sync_agent(t);
+        if persist {
+            self.pending.push(Write::Tab(self.tabs[t].clone()));
+        }
+        self.state_changed(t, before);
+        let (state, _) = status(&self.tabs[t].facts);
+        Ok(json!({ "accepted": true, "state": state }))
     }
 
     /// Starts the tab's process, one launch at a time (contract 1).
@@ -1055,7 +1273,21 @@ impl Core {
         let hook_token = new_token();
         self.tokens.retain(|_, id| *id != self.tabs[t].id);
         self.tokens.insert(token.clone(), self.tabs[t].id.clone());
+        self.hook_tokens.retain(|_, id| *id != self.tabs[t].id);
+        self.hook_tokens
+            .insert(hook_token.clone(), self.tabs[t].id.clone());
+        // An agent tab types its command into the shell, so aliases resolve (R-AG-4); with a saved
+        // session it resumes it (R-AG-7).
+        let command = match (self.tabs[t].kind, &self.tabs[t].session_id) {
+            (TabKind::Agent, Some(sid)) => {
+                let base = self.agent_command(t);
+                Some(format!("{base} --resume {sid}"))
+            }
+            (TabKind::Agent, None) => Some(self.agent_command(t)),
+            _ => self.tabs[t].launch.command.clone(),
+        };
         let tab = &mut self.tabs[t];
+        tab.agent = None;
         tab.launch_error = None;
         tab.last_exit = None;
         tab.facts = Facts {
@@ -1069,7 +1301,7 @@ impl Core {
             name: tab.name.clone(),
             kind: tab.kind,
             cwd: tab.cwd.clone(),
-            command: tab.launch.command.clone(),
+            command,
             token,
             hook_token,
         }));
@@ -1090,6 +1322,7 @@ impl Core {
                 tab.facts.launch_error = true;
                 tab.launch_error = Some(err);
                 self.tokens.retain(|_, id| id != tab_id);
+                self.hook_tokens.retain(|_, id| id != tab_id);
             }
             TabFact::Cwd(cwd) => {
                 if tab.cwd != cwd {
@@ -1102,6 +1335,7 @@ impl Core {
                 }
             }
             TabFact::Title(title) => tab.live_title = title,
+            TabFact::CommandLine(line) => tab.command_line = Some(line),
             TabFact::Mark(Mark::PromptStart | Mark::PromptEnd) => {
                 tab.facts.spawning = false;
                 tab.facts.in_command = false;
@@ -1114,6 +1348,16 @@ impl Core {
             }
             TabFact::Mark(Mark::CommandEnd(code)) => {
                 tab.facts.in_command = false;
+                // The agent's command ended: drop its state and fall back to shell status. A
+                // `mapo hook` run as a shell command (the synthetic path) is not the agent's command.
+                let hook_command = tab
+                    .command_line
+                    .as_deref()
+                    .is_some_and(|l| l.trim_start().starts_with("mapo hook"));
+                if !hook_command && tab.agent.take().is_some() {
+                    tab.facts.agent = None;
+                    tab.tool_summary = None;
+                }
                 let ran = tab.command_started.take().map(|t| t.elapsed());
                 let code = code.unwrap_or(0);
                 if let Some(ran) = ran {
@@ -1145,6 +1389,7 @@ impl Core {
                 duration_ms,
             } => {
                 self.tokens.retain(|_, id| id != tab_id);
+                self.hook_tokens.retain(|_, id| id != tab_id);
                 // R-TAB-12: a clean exit after the first prompt closes the tab, as terminals do.
                 if code == 0 && after_prompt {
                     let _ = self.close_tab(t, true);

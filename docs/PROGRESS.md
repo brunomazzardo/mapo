@@ -4,6 +4,7 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## Needs the user
 
+- **Real-Claude drive steps for M2 weren't run tonight.** The account hit its usage limit at 02:04, so the coordinator ran only the synthetic hook path (fixtures through `mapo hook`). With usage to spare, run the M2 real-Claude steps from PLAN §5 (a harmless prompt in `$DRIVE_TMP`, trust, interrupt, resume with PAPAYA).
 - **Merging helper branches into `native` is blocked (decide how integration should work).** At 00:05 on 2026-09-29, the coordinator's auto-mode classifier refused to cherry-pick mapo-30's T0.3 commits (`native-daemon`: e8381971bde, 217a57820d7) onto `native` and run their drive, as "Untrusted Code Integration". Nobody retried it or worked around it, and no other session was asked to merge. Earlier, 29d43a8 (mapo-2b's SwiftTerm surface, from `native-surface` 7f190378bee) had already been cherry-picked, built and unit-tested on `native` before the refusal. It is kept; revert it with `git revert 29d43a8` if you prefer. The helpers keep committing on their own branches (`native-daemon`, `native-termcore`, `native-app`, `native-surface`) without cross-merging. To continue, review and merge them yourself (`git merge --ff-only` or `git cherry-pick` in ~/code/mapo-native), or allow the coordinator to integrate helper commits.
 - **Allow acquiring GhosttyKit** (the prebuilt libghostty-spm pin from PLAN T0.8, or a Zig 0.16 source build) so T0.8 can move from SwiftTerm to Ghostty (D-13; goal: terminal quality). On 2026-09-28 at 23:40 the coordinator's auto-mode permission classifier refused the prebuilt download as "Untrusted Code Integration". Tonight's run uses the SwiftTerm fallback behind `TerminalSurface`, and nobody retried the download or worked around the refusal.
 - **Install the Metal Toolchain?** (`xcodebuild -downloadComponent MetalToolchain`, an Apple component outside Homebrew and cargo, so HANDOFF §6.4 leaves it to you). SwiftTerm 1.12 and later compile a Metal shader and fail without it, so the fallback is pinned to SwiftTerm 1.11.2 (CoreGraphics renderer). Moving to 1.20.0 is a one-line change once it's installed.
@@ -37,6 +38,15 @@ Newest entries first. Every session adds an entry. Every overnight run ends with
 
 ## 2026-09-28/29 overnight run (coordinator mapo-bf)
 
+- **M2 daemon side: T2.1, T2.2, T2.3 and T2.5 done, synthetic path.**
+  - **Plugin:** `plugin/` has the manifest, `hooks.json` for the ten R-AG-3 events, `.mcp.json` and a stub skill. It's embedded in the bundle as `Resources/claude-plugin`, and every tab gets `CLAUDE_CODE_PLUGIN_DIRS`, appended to any existing value.
+  - **`mapo hook`:** reads up to 1 MiB, keeps only `hook.report`'s fields, logs only to `hook.<date>.log`, and always exits 0 within 2 s.
+  - **`hook.report`:** hook credentials are separate tokens bound to their own tab and may only call `hook.report`. It feeds the FEATURE-MAP §5.1 status machine (`crates/mapo-agent`, table tests), whose state wins over the shell's. Needs-you details read "Approve: …". Optimistic Working on a send reverts after 6 s. Agent state resets when the agent's command ends.
+  - **Commands:** `attention.changed`; `tab.interrupt` (Escape, then late events ignored); `workspace.configure --agent-command`; agent tabs type the agent command into the shell.
+  - **Resume:** migration 0002 persists `session_id`, and after a restart the tab relaunches with `--resume <id>`.
+  - Also: a tab's launch command now counts as pending, so idle waits don't return before it ran.
+  - Drive `task-t2-2` PASS 18/18, evidence `evidence/task-t2-2/20260929-032345`.
+  - Not run: the real-Claude steps (T2.1 `hooksConnected` from real Claude, T2.3 a real interrupt, T2.5 PAPAYA). They would spend the shared usage that cut the night short (see Needs the user).
 - **T1.10 done: M1 gate PASS.** `just drive m1-daily` PASS 16/16 (8 steps), evidence `evidence/m1-daily/20260929-031518`.
   - Measured: launch 430 ms and relaunch 430 ms (Debug; budget 400 in release), pane.split 10 ms, workspace-switch p95 29 ms (budget 50), daemon reconnect 233 ms, app.reattach after a daemon restart 273 ms (budget 150; the span includes reconnect backoff), footprints daemon 12 MB and app 97 MB.
   - Fixed on the way: ⌘Q through `ui.key` ran the quit inside the automation handler, so the unsaved-files sheet's modal loop blocked every later `ui.*` call. The quit now runs on the next run-loop turn.

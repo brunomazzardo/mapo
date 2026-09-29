@@ -9,6 +9,8 @@ pub struct Resources {
     pub dir: PathBuf,
     /// The directory holding the `mapo` tabs should run.
     pub bin_dir: PathBuf,
+    /// Mapo's Claude Code plugin: `plugin/` in a worktree, `Contents/Resources/claude-plugin/` in a bundle.
+    pub plugin_dir: PathBuf,
 }
 
 impl Resources {
@@ -22,6 +24,7 @@ impl Resources {
             return Self {
                 dir: contents.join("Resources"),
                 bin_dir: contents.join("Resources/bin"),
+                plugin_dir: contents.join("Resources/claude-plugin"),
             };
         }
         let root = real
@@ -32,6 +35,7 @@ impl Resources {
         Self {
             dir: root.join("resources"),
             bin_dir: exe_dir,
+            plugin_dir: root.join("plugin"),
         }
     }
 
@@ -91,6 +95,11 @@ pub fn build(
             .map(|(_, v)| v.clone())
     };
     let old_zdotdir = get("ZDOTDIR");
+    // Every Claude started in the tab loads Mapo's plugin, after any the user already set (D-27).
+    let plugin_dirs = match get("CLAUDE_CODE_PLUGIN_DIRS").filter(|v| !v.is_empty()) {
+        Some(existing) => format!("{existing}:{}", res.plugin_dir.display()),
+        None => res.plugin_dir.display().to_string(),
+    };
     let path = get("PATH").unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into());
     let mut env: Vec<(String, String)> =
         inherited.into_iter().filter(|(k, _)| !dropped(k)).collect();
@@ -116,6 +125,7 @@ pub fn build(
         ("TERM_PROGRAM", "ghostty".to_owned()),
         ("COLORTERM", "truecolor".to_owned()),
         ("ZDOTDIR", res.zsh_dir().display().to_string()),
+        ("CLAUDE_CODE_PLUGIN_DIRS", plugin_dirs),
     ];
     if let Some(ti) = terminfo {
         set.push(("TERMINFO", ti));
@@ -162,6 +172,7 @@ mod tests {
         let res = Resources {
             dir: PathBuf::from("/r"),
             bin_dir: PathBuf::from("/b"),
+            plugin_dir: PathBuf::from("/p"),
         };
         let id = TabIdentity {
             instance: "dev-x",
@@ -178,6 +189,7 @@ mod tests {
         assert_eq!(
             got,
             [
+                "CLAUDE_CODE_PLUGIN_DIRS=/p",
                 "COLORTERM=truecolor",
                 "HOME=/Users/u",
                 "LANG=pt_BR.UTF-8",

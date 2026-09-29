@@ -19,6 +19,12 @@ pub enum WorkspaceCommand {
     Rename { name: String, new_name: String },
     /// Make a workspace the active one.
     Activate { name: String },
+    /// Set the command agent tabs in this workspace run (default: claude).
+    Configure {
+        name: String,
+        #[arg(long = "agent-command")]
+        agent_command: Option<String>,
+    },
     /// Move a workspace to a zero-based position in the rail.
     Move {
         name: String,
@@ -88,6 +94,8 @@ pub enum TabCommand {
         #[arg(long)]
         index: usize,
     },
+    /// Interrupt an agent (Escape); late hook events are ignored until the next prompt.
+    Interrupt { name: String },
     /// Stop the running command (Ctrl-C).
     Stop { name: String },
     /// Restart a stopped tab's shell in its last folder.
@@ -166,6 +174,13 @@ pub fn workspace(cli: &Cli, cmd: &WorkspaceCommand) -> Result<(), CliError> {
             json!({ "workspace": name, "name": new_name }),
         ),
         WorkspaceCommand::Activate { name } => ("workspace.activate", json!({ "workspace": name })),
+        WorkspaceCommand::Configure {
+            name,
+            agent_command,
+        } => (
+            "workspace.configure",
+            json!({ "workspace": name, "agentCommand": agent_command }),
+        ),
         WorkspaceCommand::Move { name, index } => (
             "workspace.move",
             json!({ "workspace": name, "index": index }),
@@ -272,6 +287,7 @@ pub fn tab(cli: &Cli, cmd: &TabCommand) -> Result<(), CliError> {
         }
         TabCommand::Focus { name } => ("tab.focus", json!({ "tab": name })),
         TabCommand::Stop { name } => ("tab.stop", json!({ "tab": name })),
+        TabCommand::Interrupt { name } => ("tab.interrupt", json!({ "tab": name })),
         TabCommand::Move { name, index } => ("tab.move", json!({ "tab": name, "index": index })),
         TabCommand::Restart { name } => ("tab.restart", json!({ "tab": name })),
         TabCommand::Send { .. }

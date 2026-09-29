@@ -1,0 +1,5 @@
+{
+  "name": "mapo",
+  "version": "0.1.0",
+  "description": "Connects Claude Code sessions in Mapo tabs to Mapo: status hooks, the mapo MCP server and the mapo skill."
+}

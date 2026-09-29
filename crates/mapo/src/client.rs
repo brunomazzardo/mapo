@@ -48,6 +48,20 @@ impl Client {
         let paths = instance
             .paths()
             .map_err(|e| RpcError::internal(e.to_string()))?;
+        let credential = credential(instance, &paths)?;
+        Self::connect_with(instance, role, credential, timeout)
+    }
+
+    /// Connects with an explicit credential (the hook credential for `mapo hook`).
+    pub fn connect_with(
+        instance: &Instance,
+        role: Role,
+        credential: Credential,
+        timeout: Option<Duration>,
+    ) -> Result<Self, RpcError> {
+        let paths = instance
+            .paths()
+            .map_err(|e| RpcError::internal(e.to_string()))?;
         let stream = UnixStream::connect(&paths.socket).map_err(|_| {
             RpcError::unavailable(format!("no daemon for instance {}", instance.name))
                 .with_hint(format!("mapo --instance {} daemon", instance.name))
@@ -78,7 +92,7 @@ impl Client {
             protocol: PROTOCOL_VERSION,
             role,
             client: format!("mapo/{}", env!("CARGO_PKG_VERSION")),
-            credential: credential(instance, &paths)?,
+            credential,
             attach: None,
         };
         let value = serde_json::to_value(&params).map_err(|e| RpcError::internal(e.to_string()))?;

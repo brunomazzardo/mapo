@@ -554,6 +554,7 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "mapo-agent",
  "mapo-core",
  "mapo-git",
  "mapo-instance",
@@ -581,6 +582,7 @@ dependencies = [
 name = "mapo-core"
 version = "0.1.0"
 dependencies = [
+ "mapo-agent",
  "mapo-git",
  "mapo-instance",
  "mapo-protocol",

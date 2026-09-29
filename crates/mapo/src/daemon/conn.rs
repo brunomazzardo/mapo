@@ -334,6 +334,12 @@ async fn hello(
     }
     let tab_caller = match params.credential.kind {
         CredentialKind::Tab => shared.core.authenticate_tab(&params.credential.token).await,
+        CredentialKind::Hook => {
+            shared
+                .core
+                .authenticate_hook(&params.credential.token)
+                .await
+        }
         _ => None,
     };
     let caller = match params.credential.kind {
@@ -344,6 +350,11 @@ async fn hello(
         },
         CredentialKind::Tab if tab_caller.is_some() => tab_caller.unwrap_or(Caller {
             kind: CredentialKind::Tab,
+            tab_id: None,
+            workspace_id: None,
+        }),
+        CredentialKind::Hook if tab_caller.is_some() => tab_caller.unwrap_or(Caller {
+            kind: CredentialKind::Hook,
             tab_id: None,
             workspace_id: None,
         }),
@@ -455,6 +466,17 @@ async fn subscribe(shared: &Shared, req: &Request, tx: &Tx) {
 }
 
 async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Value, RpcError> {
+    if session.caller.kind == CredentialKind::Hook && req.method != methods::HOOK_REPORT {
+        return Err(RpcError::forbidden(
+            "a hook credential may only call hook.report",
+        ));
+    }
+    if req.method == methods::TAB_INTERRUPT {
+        // Escape to the agent first, then record the interrupt so late hooks are ignored (R-AG-4).
+        let p: mapo_protocol::types::TabRef = parse_params(&req.params)?;
+        let (_, h) = live_tab(shared, session, p.tab.clone(), p.workspace.clone()).await?;
+        h.write(b"\x1b").await;
+    }
     if mapo_core::CoreHandle::handles(&req.method) {
         return shared
             .core
@@ -570,7 +592,7 @@ async fn tab_io(shared: &Shared, session: &Session, req: &Request) -> Result<Val
     match req.method.as_str() {
         methods::TAB_SEND => {
             let p: TabSend = parse_params(&req.params)?;
-            let (_, h) = live_tab(shared, session, p.tab, p.workspace).await?;
+            let (h_summary, h) = live_tab(shared, session, p.tab, p.workspace).await?;
             let paste = match p.paste {
                 None => None,
                 Some(Value::Bool(b)) => Some(b),
@@ -582,6 +604,12 @@ async fn tab_io(shared: &Shared, session: &Session, req: &Request) -> Result<Val
                 }
             };
             let sent = h.send(&p.text, p.execute, paste).await?;
+            if summary_kind_is_agent(&h_summary)
+                && p.execute
+                && !p.text.trim_start().starts_with('/')
+            {
+                shared.core.agent_submit(&h_summary.id);
+            }
             Ok(json!({ "sent": sent }))
         }
         methods::TAB_STOP => {
@@ -680,6 +708,12 @@ async fn terminals(shared: &Shared) -> Vec<Value> {
             Some(json!({ "tabId": id, "paneId": t["paneId"], "text": handle.read(200).text }))
         })
         .collect()
+}
+
+/// Agent tabs, and shell tabs where an agent reported hooks, get optimistic Working on a send.
+fn summary_kind_is_agent(s: &mapo_protocol::types::TabSummary) -> bool {
+    s.kind == mapo_protocol::types::TabKind::Agent
+        || s.agent.as_ref().is_some_and(|a| a.hooks_connected)
 }
 
 fn to_value(v: &impl serde::Serialize) -> Result<Value, RpcError> {

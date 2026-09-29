@@ -125,6 +125,8 @@ struct State {
     in_command: bool,
     /// An executed send waits for its prompt to go away.
     pending_exec: bool,
+    /// A 133;C arrived and its command-line title hasn't yet.
+    after_c: bool,
     /// A send made while a command ran: at the next prompt it becomes typeahead.
     busy_send: bool,
     /// After that prompt, stay non-idle briefly so typeahead can start (its 133;C clears this).
@@ -281,6 +283,7 @@ pub fn launch(spec: &LaunchSpec, ctx: &Arc<HostContext>) -> Option<TabHandle> {
         at_prompt: false,
         in_command: false,
         pending_exec: false,
+        after_c: false,
         busy_send: false,
         settle_until: None,
         last_send: None,
@@ -336,7 +339,11 @@ async fn read_loop(
                 ready_sent = true;
                 (ctx.sink)(&inner.id, TabFact::Ready);
                 if let Some(cmd) = command.take() {
-                    inner_write(&inner, format!("{cmd}\r").as_bytes()).await;
+                    {
+                        // A launch command is a command the tab owes: idle waits hold until it ran.
+                        lock(&inner).pending_exec = true;
+                        inner_write(&inner, format!("{cmd}\r").as_bytes()).await;
+                    }
                 }
                 continue;
             }
@@ -351,7 +358,11 @@ async fn read_loop(
             if matches!(f, TabFact::Mark(CoreMark::PromptStart)) {
                 ready_sent = true;
                 if let Some(cmd) = command.take() {
-                    inner_write(&inner, format!("{cmd}\r").as_bytes()).await;
+                    {
+                        // A launch command is a command the tab owes: idle waits hold until it ran.
+                        lock(&inner).pending_exec = true;
+                        inner_write(&inner, format!("{cmd}\r").as_bytes()).await;
+                    }
                 }
             }
             (ctx.sink)(&inner.id, f);
@@ -394,7 +405,14 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
     for at in parsed {
         match at.fact {
             Fact::Cwd(c) => facts.push(TabFact::Cwd(c)),
-            Fact::Title(t) => title = Some(t),
+            Fact::Title(t) => {
+                // preexec emits C, then the command line as the title: report it at once.
+                if st.after_c {
+                    facts.push(TabFact::CommandLine(t.clone()));
+                    st.after_c = false;
+                }
+                title = Some(t);
+            }
             Fact::Mark(m) => {
                 st.integrated = true;
                 let core = match m {
@@ -428,6 +446,7 @@ fn process(inner: &Inner, chunk: &[u8]) -> (Vec<TabFact>, Vec<String>, Option<St
                             s.command_start = Some(at.text_offset);
                         }
                         st.last_command = Some((at.text_offset, None, None));
+                        st.after_c = true;
                         CoreMark::CommandStart
                     }
                     Mark::D { exit_code } => {

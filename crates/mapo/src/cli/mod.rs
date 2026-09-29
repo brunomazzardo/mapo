@@ -4,6 +4,7 @@ mod attach;
 mod debug;
 mod explorer;
 mod file;
+mod hook;
 mod instance;
 mod pane;
 mod state;
@@ -74,6 +75,9 @@ pub enum Command {
     Instance(instance::InstanceArgs),
     /// Attach this terminal to a tab (what every terminal surface runs).
     Attach(attach::AttachArgs),
+    /// Report a Claude hook event (run by Mapo's Claude plugin; reads hook JSON on stdin).
+    #[command(hide = true)]
+    Hook,
     /// Run the daemon for this instance (detached unless --foreground).
     Daemon {
         /// Stay in the foreground and log to stderr too.
@@ -109,6 +113,7 @@ impl Cli {
             Command::File(cmd) => file::run(self, cmd),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
             Command::Attach(args) => attach::run(self, args),
+            Command::Hook => hook::run(self),
             Command::Daemon { foreground } => {
                 crate::daemon::run(&self.resolve_instance()?, *foreground)
             }

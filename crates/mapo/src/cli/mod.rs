@@ -1,5 +1,6 @@
 //! The clap command tree. Each group lives in its own module.
 
+mod attach;
 mod debug;
 mod instance;
 mod state;
@@ -55,6 +56,8 @@ pub enum Command {
     },
     /// Show, list, wait for, stop or clean instances.
     Instance(instance::InstanceArgs),
+    /// Attach this terminal to a tab (what every terminal surface runs).
+    Attach(attach::AttachArgs),
     /// Run the daemon for this instance (detached unless --foreground).
     Daemon {
         /// Stay in the foreground and log to stderr too.
@@ -85,6 +88,7 @@ impl Cli {
                 types,
             } => state::events(self, *follow, *after, types),
             Command::Instance(args) => instance::run(self, args.command.as_ref()),
+            Command::Attach(args) => attach::run(self, args),
             Command::Daemon { foreground } => {
                 crate::daemon::run(&self.resolve_instance()?, *foreground)
             }

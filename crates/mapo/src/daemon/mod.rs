@@ -1,9 +1,12 @@
 //! `mapo daemon`: one daemon per instance that owns state and processes (ARCHITECTURE §3,
 //! ENGINEERING §2.3). Without `--foreground` it detaches and waits until the daemon answers.
 
+mod attach;
 mod conn;
 mod host;
 mod logging;
+
+pub use logging::today;
 
 use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;

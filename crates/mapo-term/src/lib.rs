@@ -3,6 +3,7 @@
 pub mod env;
 pub mod osc;
 pub mod read;
+pub mod render;
 pub mod replay;
 pub mod ring;
 pub mod tab;

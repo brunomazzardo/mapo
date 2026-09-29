@@ -2,6 +2,7 @@
 //! the hello handshake, method names, shared types and the attach frame codec.
 
 pub mod error;
+pub mod frames;
 pub mod hello;
 pub mod methods;
 pub mod rpc;

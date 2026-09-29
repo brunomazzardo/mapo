@@ -80,6 +80,15 @@ pub struct HelloResult {
     pub instance: String,
     pub features: Vec<String>,
     pub caller: Caller,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<AttachResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachResult {
+    pub tab_id: String,
+    pub replay_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

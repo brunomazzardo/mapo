@@ -102,6 +102,7 @@ fn samples() -> Vec<(&'static str, Value)> {
                     tab_id: None,
                     workspace_id: None,
                 },
+                attach: None,
             }),
         ),
         (

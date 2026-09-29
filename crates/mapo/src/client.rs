@@ -71,6 +71,7 @@ impl Client {
                     tab_id: None,
                     workspace_id: None,
                 },
+                attach: None,
             },
         };
         let params = HelloParams {

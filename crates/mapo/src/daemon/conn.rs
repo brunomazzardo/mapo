@@ -22,6 +22,7 @@ const MAX_LINE: u64 = 8 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct Session {
     pub caller: Caller,
+    pub role: mapo_protocol::hello::Role,
 }
 
 enum Line {
@@ -48,19 +49,22 @@ async fn read_line<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> std::i
     Ok(Line::Text(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-fn encode(msg: &impl serde::Serialize) -> String {
+pub(super) fn encode(msg: &impl serde::Serialize) -> Vec<u8> {
     let mut s = serde_json::to_string(msg).unwrap_or_default();
     s.push('\n');
-    s
+    s.into_bytes()
 }
+
+/// Bytes queued for the connection's writer task.
+pub(super) type Tx = mpsc::UnboundedSender<Vec<u8>>;
 
 pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let writer = tokio::spawn(async move {
-        while let Some(line) = rx.recv().await {
-            if write.write_all(line.as_bytes()).await.is_err() {
+        while let Some(bytes) = rx.recv().await {
+            if write.write_all(&bytes).await.is_err() {
                 break;
             }
         }
@@ -68,7 +72,13 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     });
 
     let session = match hello(&shared, &mut reader, &tx).await {
-        Some(s) => s,
+        Some((s, None)) => s,
+        Some((s, Some(start))) => {
+            super::attach::run(&shared, &s, start, &mut reader, &tx).await;
+            drop(tx);
+            let _ = writer.await;
+            return;
+        }
         None => {
             drop(tx);
             let _ = writer.await;
@@ -129,16 +139,26 @@ pub async fn handle(shared: Arc<Shared>, stream: UnixStream) {
     if let Some(task) = subscribe_task {
         task.abort();
     }
+    if session.role == mapo_protocol::hello::Role::App {
+        shared.core.emit("app.disconnected", json!({}));
+    }
     drop(tx);
     let _ = writer.await;
+}
+
+/// An attach hello whose response the attach session sends once the tab resolves.
+pub(super) struct AttachStart {
+    pub id: Id,
+    pub result: HelloResult,
+    pub params: mapo_protocol::hello::AttachHello,
 }
 
 /// The first message must be `hello`; anything else is answered and the connection closed.
 async fn hello(
     shared: &Shared,
     reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
-    tx: &mpsc::UnboundedSender<String>,
-) -> Option<Session> {
+    tx: &Tx,
+) -> Option<(Session, Option<AttachStart>)> {
     let fail = |id: Option<Id>, e: RpcError| {
         let _ = tx.send(encode(&Response::err(id, e)));
         None
@@ -203,18 +223,47 @@ async fn hello(
         daemon: env!("CARGO_PKG_VERSION").into(),
         boot_id: shared.boot_id.clone(),
         instance: shared.instance.clone(),
-        features: vec!["events".into()],
+        features: vec!["events".into(), "attach".into()],
         caller: caller.clone(),
+        attach: None,
     };
+    if params.role == mapo_protocol::hello::Role::Attach {
+        let Some(attach) = params.attach else {
+            return fail(
+                Some(req.id),
+                RpcError::invalid("an attach hello needs params.attach"),
+            );
+        };
+        return Some((
+            Session {
+                caller,
+                role: params.role,
+            },
+            Some(AttachStart {
+                id: req.id,
+                result,
+                params: attach,
+            }),
+        ));
+    }
+    if params.role == mapo_protocol::hello::Role::App {
+        shared.core.emit("app.connected", json!({}));
+    }
     let _ = tx.send(encode(&Response::ok(
         req.id,
         serde_json::to_value(&result).unwrap_or_default(),
     )));
-    Some(Session { caller })
+    Some((
+        Session {
+            caller,
+            role: params.role,
+        },
+        None,
+    ))
 }
 
 /// Streams events after the `events.subscribe` response, until the connection or daemon ends.
-async fn subscribe(shared: &Shared, req: &Request, tx: &mpsc::UnboundedSender<String>) {
+async fn subscribe(shared: &Shared, req: &Request, tx: &Tx) {
     let params = match parse_params::<mapo_protocol::types::SubscribeParams>(&req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -311,7 +360,7 @@ async fn dispatch(shared: &Shared, session: &Session, req: Request) -> Result<Va
 }
 
 /// Resolves the tab through the core, then acts on its live handle.
-async fn live_tab(
+pub(super) async fn live_tab(
     shared: &Shared,
     session: &Session,
     tab: Option<String>,

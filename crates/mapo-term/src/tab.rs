@@ -707,8 +707,14 @@ impl TabHandle {
         lock(&self.inner).exit.is_some()
     }
 
-    /// For attach (T0.6): the replay bytes and a live receiver, taken atomically.
-    pub fn attach(&self) -> (Vec<u8>, broadcast::Receiver<Arc<[u8]>>, bool) {
+    /// For attach (T0.6): the replay payload and a live receiver, taken in one step so no byte
+    /// is lost or doubled between them. Raw replay falls back to grid when the ring no longer
+    /// holds the switch into the alternate screen.
+    pub fn attach(
+        &self,
+        strategy: crate::render::ReplayStrategy,
+    ) -> (Vec<u8>, broadcast::Receiver<Arc<[u8]>>) {
+        use crate::render::{RESET, ReplayStrategy, grid, trailer};
         let mut st = lock(&self.inner);
         st.attached += 1;
         let rx = self.inner.output.subscribe();
@@ -718,12 +724,39 @@ impl TabHandle {
                 .ring
                 .last_alt_screen_enter()
                 .is_none_or(|o| o < st.ring.start());
-        let (a, b) = st.ring.contents();
-        (
-            crate::replay::strip_queries(&[a, b].concat()),
-            rx,
-            trimmed_alt,
-        )
+        let mut out = if strategy == ReplayStrategy::Grid || trimmed_alt {
+            grid(&st.term, 1000)
+        } else {
+            let (a, b) = st.ring.contents();
+            let mut v = RESET.to_vec();
+            v.extend(crate::replay::strip_queries(&[a, b].concat()));
+            v
+        };
+        out.extend(trailer(&st.term));
+        (out, rx)
+    }
+
+    /// A fresh replay for a lagging client (resync), without counting a new attach.
+    pub fn resync(
+        &self,
+        strategy: crate::render::ReplayStrategy,
+    ) -> (Vec<u8>, broadcast::Receiver<Arc<[u8]>>) {
+        let r = self.attach(strategy);
+        self.detach();
+        r
+    }
+
+    /// Resolves with the exit code once the shell exits.
+    pub async fn wait_exit(&self) -> i32 {
+        loop {
+            let notified = self.inner.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(code) = lock(&self.inner).exit {
+                return code;
+            }
+            notified.await;
+        }
     }
 
     pub fn detach(&self) {

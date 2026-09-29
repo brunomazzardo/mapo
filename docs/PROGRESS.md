@@ -35,7 +35,6 @@ Evidence folders: `evidence/m0-skeleton/20260929-040132`, `evidence/m1-daily/202
 See the Deviations table below. The main ones:
 - SwiftTerm 1.11.2 instead of GhosttyKit, so `TERM=xterm-256color`.
 - Hand-written Swift protocol types instead of typeshare, and hand-written MCP schemas instead of schemars.
-- A regex highlighter instead of tree-sitter.
 - Waiters live in the tab task.
 - `diff.open` is a new method.
 - `strip = "none"` in the release profile (Xcode 27's `strip` corrupts proc-macro dylibs).
@@ -80,7 +79,7 @@ T5.1 second pass, with the display awake: re-measure switch and reattach on Rele
 | T1.5 | UX §2.1 | Inspector segments in the toolbar | Segments sit at the top of the inspector content | The fallback UX §2.1 allows |
 | T1.5 | ARCHITECTURE §3.7 | Watching | Non-recursive watches per shown folder, plus a 5 s status cache expiry | Recursive watches on large trees are costly; collapsed subfolders refresh through the expiry |
 | M1 | ENGINEERING §4.3 | Panel toggles animate | `toggleSidebar` and `toggleInspector` flip `isCollapsed` directly when the window is occluded | AppKit never finishes the collapse animation for an occluded window, so drives couldn't toggle panels |
-| T1.6 | PLAN T1.6, D-14 | Tree-sitter highlighting (SwiftTreeSitter and Neon) | A small in-house regex highlighter (keywords, strings, comments, numbers, types) behind the same interface | Keeps the build free of new packages tonight; tree-sitter can replace it behind the interface |
+| T1.6 | PLAN T1.6, D-14 | Tree-sitter highlighting (SwiftTreeSitter and Neon) | SwiftTreeSitter without Neon, for all fifteen R-ED-2 languages (2026-09-29, branch `native-ts`). The regex highlighter stays only to color a file's first screen while its grammar's query compiles | A whole-buffer reparse off the main thread is fast enough; Neon's incremental parsing can come later behind the same interface |
 | T1.7 | UX §10 | SwiftUI palette | The hosting view vends its accessibility children itself | SwiftUI builds its AX tree only for assistive apps, so `ui.tree` couldn't see the field or rows |
 | T1.9 | UX §9 | Glass everywhere | `[ui] reduce-transparency = "off"` can't undo the system setting for system glass | System glass follows the system setting |
 | T0.8 | PLAN T0.8 fallback | SwiftTerm "from 1.20.0" | SwiftTerm exactly 1.11.2 | 1.12+ needs the Metal Toolchain, which isn't installed (see Needs the user) |

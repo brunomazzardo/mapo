@@ -49,33 +49,87 @@ import Testing
 }
 
 /// The text of each token of one kind.
-@MainActor private func words(_ language: SyntaxLanguage, _ text: String, _ kind: SyntaxKind) -> [String] {
-    language.highlighter.tokens(in: text).filter { $0.kind == kind }.map {
-        (text as NSString).substring(with: $0.range)
+private func words(_ highlighter: any SyntaxHighlighter, _ text: String, _ kind: SyntaxKind) -> [String] {
+    highlighter.tokens(in: text).filter { $0.kind == kind }.map { (text as NSString).substring(with: $0.range) }
+}
+
+/// Every kind's tokens, for one snapshot-style comparison.
+private func kinds(_ language: SyntaxLanguage, _ text: String) -> [SyntaxKind: [String]] {
+    var out: [SyntaxKind: [String]] = [:]
+    for kind in SyntaxKind.allCases where kind != .punctuation {
+        let found = words(language.highlighter, text, kind)
+        if !found.isEmpty { out[kind] = found }
     }
+    return out
 }
 
-@MainActor @Test func highlightsSwift() {
+@Test func treeSitterHighlightsSwift() {
+    let code = "// note \"x\"\nstruct Foo: Bar {\n    func run() -> String { return baz(\"a // b\", 42) }\n}\n"
+    #expect(
+        kinds(.swift, code) == [
+            .comment: ["// note \"x\""],
+            .keyword: ["struct", "func", "return"],
+            .type: ["Foo", "Bar", "String"],
+            .function: ["run", "baz"],
+            .string: ["\"", "a // b", "\""],
+            .number: ["42"],
+        ])
+}
+
+@Test func treeSitterHighlightsRust() {
+    let code =
+        "/// Doc\npub struct Foo { x: u8 }\nfn main() {\n    let v = Vec::new(); // c\n    println!(\"hi\", 3);\n}\n"
+    #expect(
+        kinds(.rust, code) == [
+            .comment: ["/// Doc\n", "// c"],
+            .keyword: ["pub", "struct", "fn", "let"],
+            .type: ["Foo", "u8", "Vec"],
+            .function: ["main", "new", "println", "!"],
+            .string: ["\"hi\""],
+            .number: ["3"],
+        ])
+}
+
+@Test func treeSitterHighlightsOtherLanguages() {
+    let samples: [(SyntaxLanguage, String, SyntaxKind, [String])] = [
+        (.typescript, "const x: Foo = 1; interface A {}", .keyword, ["const", "interface"]),
+        (.tsx, "const a = <div className=\"x\" />;", .string, ["\"x\""]),
+        (.javascript, "const x = 'a' /* c */", .comment, ["/* c */"]),
+        (.json, "{\"k\": \"v\", \"n\": true}", .function, ["\"k\"", "\"n\""]),
+        (.python, "def f(): return None", .keyword, ["def", "return", "None"]),
+        (.go, "func main() { fmt.Println(1) }", .function, ["main", "Println"]),
+        (.markdown, "# Title\nsome `code` here\n", .string, ["`code`"]),
+        (.yaml, "key: 3 # c\n", .comment, ["# c"]),
+        (.toml, "[a]\nkey = \"v\"\n", .string, ["\"v\""]),
+        (.bash, "echo \"$HOME\" # c\n", .comment, ["# c"]),
+        (.css, "a { color: red; }", .function, ["color"]),
+        (.html, "<div class=\"x\">hi</div>", .type, ["div", "div"]),
+        (.sql, "SELECT a FROM t;", .keyword, ["SELECT", "FROM"]),
+    ]
+    let found = samples.map { words($0.0.highlighter, $0.1, $0.2) }
+    #expect(found == samples.map(\.3))
+}
+
+@Test func treeSitterPreparesOffTheMainThread() {
+    let highlighter = TreeSitterHighlighter.shared(for: .go)
+    highlighter.prepare()
+    #expect(highlighter.isPrepared)
+}
+
+@MainActor @Test func quickHighlighterCoversTheFirstScreen() throws {
+    let swift = try #require(SyntaxLanguage.swift.quickHighlighter)
     let code = "// note \"x\"\nlet s = \"a // b\" + Foo.bar(42)\n"
-    #expect(words(.swift, code, .comment) == ["// note \"x\""])
-    #expect(words(.swift, code, .string) == ["\"a // b\""])
-    #expect(words(.swift, code, .keyword) == ["let"])
-    #expect(words(.swift, code, .type) == ["Foo"])
-    #expect(words(.swift, code, .function) == ["bar"])
-    #expect(words(.swift, code, .number) == ["42"])
+    #expect(words(swift, code, .comment) == ["// note \"x\""])
+    #expect(words(swift, code, .string) == ["\"a // b\""])
+    #expect(words(swift, code, .function) == ["bar"])
+    let rust = try #require(SyntaxLanguage.rust.quickHighlighter)
+    #expect(words(rust, "fn main() { println!(\"hi\"); }", .function) == ["main", "println!"])
+    #expect(SyntaxLanguage.python.quickHighlighter == nil)
 }
 
-@MainActor @Test func highlightsOtherLanguages() {
-    #expect(words(.rust, "fn main() { println!(\"hi\"); }", .keyword) == ["fn"])
-    #expect(words(.rust, "fn main() { println!(\"hi\"); }", .function) == ["main", "println!"])
-    #expect(words(.typescript, "const x: Foo = `t${1}`; interface A {}", .keyword) == ["const", "interface"])
-    #expect(words(.javascript, "const x = 'a' /* c */", .comment) == ["/* c */"])
-    #expect(words(.json, "{\"k\": \"v\", \"n\": true}", .function) == ["\"k\"", "\"n\""])
-    #expect(words(.json, "{\"k\": \"v\", \"n\": true}", .string) == ["\"v\""])
-    #expect(words(.markdown, "# Title\nsome `code` here\n", .keyword) == ["# Title"])
-    #expect(words(.markdown, "# Title\nsome `code` here\n", .string) == ["`code`"])
-    #expect(SyntaxLanguage(path: "/a/b.tsx") == .typescript)
-    #expect(SyntaxLanguage(path: "/a/b.txt") == nil)
+@Test func languagesByPath() {
+    let paths = ["/a/b.tsx", "/a/b.ts", "/a/b.py", "/a/.zshrc", "/a/Cargo.lock", "/a/b.yml", "/a/b.txt"]
+    #expect(paths.map { SyntaxLanguage(path: $0) } == [.tsx, .typescript, .python, .bash, .toml, .yaml, nil])
 }
 
 @MainActor @Test func gitGutterMarksHunks() {

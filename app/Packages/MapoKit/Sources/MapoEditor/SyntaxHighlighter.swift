@@ -17,31 +17,73 @@ nonisolated public struct SyntaxToken: Equatable, Sendable {
 }
 
 /// Turns a document's text into highlight tokens. Runs off the main thread, so implementations are
-/// `Sendable` and pure. Tree-sitter was the plan (ARCHITECTURE §4.4); `RegexHighlighter` stands behind this
-/// interface until SwiftTreeSitter and Neon build with the current toolchain.
+/// `Sendable` and pure. `TreeSitterHighlighter` is the highlighter (ARCHITECTURE §4.4); `RegexHighlighter`
+/// colors the first screen while a grammar's query is still compiling.
 nonisolated public protocol SyntaxHighlighter: Sendable {
     func tokens(in text: String) -> [SyntaxToken]
+    /// Whether `tokens(in:)` is fast now, with any one-time setup done. Only a prepared highlighter runs on
+    /// the main thread.
+    var isPrepared: Bool { get }
+    /// Does the one-time setup. Blocks, so call it off the main thread.
+    func prepare()
 }
 
-/// The languages the editor highlights, chosen by file extension. Anything else is plain text.
+nonisolated extension SyntaxHighlighter {
+    public var isPrepared: Bool { true }
+    public func prepare() {}
+}
+
+/// What the last highlight pass of an editor did, for drives: which highlighter, how many UTF-16 units from
+/// the start it covered, and its token count per kind.
+nonisolated public struct HighlightSummary: Equatable, Sendable {
+    public var engine: String
+    public var length: Int
+    public var kinds: [SyntaxKind: Int]
+}
+
+/// The languages the editor highlights, chosen by file extension or name. Anything else is plain text.
 nonisolated public enum SyntaxLanguage: String, Sendable, CaseIterable {
-    case swift, rust, typescript, javascript, json, markdown
+    case swift, rust, typescript, tsx, javascript, json, python, go, markdown, yaml, toml, bash, css, html, sql
 
     public init?(path: String) {
-        let ext = (path as NSString).pathExtension.lowercased()
+        let name = (path as NSString).lastPathComponent.lowercased()
+        switch name {
+        case ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".zshenv", ".profile":
+            self = .bash
+            return
+        case "cargo.lock", "uv.lock", "poetry.lock":
+            self = .toml
+            return
+        default: break
+        }
+        let ext = (name as NSString).pathExtension
         switch ext {
         case "swift": self = .swift
         case "rs": self = .rust
-        case "ts", "tsx", "mts", "cts": self = .typescript
+        case "ts", "mts", "cts": self = .typescript
+        case "tsx": self = .tsx
         case "js", "jsx", "mjs", "cjs": self = .javascript
         case "json", "jsonc", "json5": self = .json
+        case "py", "pyi", "pyw": self = .python
+        case "go": self = .go
         case "md", "markdown", "mdx": self = .markdown
+        case "yaml", "yml": self = .yaml
+        case "toml": self = .toml
+        case "sh", "bash", "zsh": self = .bash
+        case "css": self = .css
+        case "html", "htm", "xhtml": self = .html
+        case "sql": self = .sql
         default: return nil
         }
     }
 
     /// The highlighter for this language.
     public var highlighter: any SyntaxHighlighter {
+        TreeSitterHighlighter.shared(for: self)
+    }
+
+    /// A highlighter that is fast from the first call, for the first screen while `highlighter` prepares.
+    public var quickHighlighter: (any SyntaxHighlighter)? {
         RegexHighlighter.shared(for: self)
     }
 }
@@ -80,11 +122,11 @@ nonisolated public final class RegexHighlighter: SyntaxHighlighter, @unchecked S
     nonisolated(unsafe) private static var cache: [SyntaxLanguage: RegexHighlighter] = [:]
     private static let lock = NSLock()
 
-    static func shared(for language: SyntaxLanguage) -> RegexHighlighter {
+    static func shared(for language: SyntaxLanguage) -> RegexHighlighter? {
         lock.lock()
         defer { lock.unlock() }
         if let cached = cache[language] { return cached }
-        let made = make(language)
+        guard let made = make(language) else { return nil }
         cache[language] = made
         return made
     }
@@ -101,7 +143,7 @@ nonisolated public final class RegexHighlighter: SyntaxHighlighter, @unchecked S
     private static let dq = "\"(?:\\\\.|[^\"\\\\\\n])*\"?"
     private static let sq = "'(?:\\\\.|[^'\\\\\\n])*'?"
 
-    private static func make(_ language: SyntaxLanguage) -> RegexHighlighter {
+    private static func make(_ language: SyntaxLanguage) -> RegexHighlighter? {
         switch language {
         case .swift:
             return RegexHighlighter(rules: [
@@ -135,9 +177,9 @@ nonisolated public final class RegexHighlighter: SyntaxHighlighter, @unchecked S
                 ("type", .type, typeName),
                 ("function", .function, call),
             ])
-        case .typescript, .javascript:
+        case .typescript, .tsx, .javascript:
             let tsOnly =
-                language == .typescript
+                language != .javascript
                 ? " abstract declare enum implements interface keyof namespace private protected public readonly type satisfies infer is"
                 : ""
             return RegexHighlighter(rules: [
@@ -174,6 +216,8 @@ nonisolated public final class RegexHighlighter: SyntaxHighlighter, @unchecked S
                     ("list", .punctuation, "^[ \\t]*(?:[-*+]|\\d+[.)])(?=[ \\t])"),
                     ("quote", .comment, "^>[^\\n]*"),
                 ], options: [.anchorsMatchLines])
+        case .python, .go, .yaml, .toml, .bash, .css, .html, .sql:
+            return nil
         }
     }
 }

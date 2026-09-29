@@ -98,6 +98,7 @@ Justifications for the dependencies added in M1:
 - `notify` 8.2.0 (CC0): FSEvents watching without our own CoreServices bindings.
 - `notify-debouncer-full` 0.7.0 (MIT/Apache-2.0): the 150 ms debounce, with `NoCache` so watching a git dir doesn't walk the tree.
 - SwiftTerm 1.11.2 (MIT): the terminal renderer while GhosttyKit can't be acquired (see PROGRESS).
+- SwiftTreeSitter 0.25.0 (BSD-3, with tree-sitter 0.25.10, MIT) and the tree-sitter grammars for Swift, Rust, TypeScript/TSX, JavaScript, JSON, Python, Go, Markdown, YAML, TOML, Bash, CSS, HTML and SQL (all MIT): editor highlighting (R-ED-2). Versions are pinned in `app/Packages/MapoKit/Package.swift`.
 
 Deliberately not used in v1:
 
@@ -345,7 +346,7 @@ SwiftUI is only for the ⌘K palette (in an `NSPanel`), settings, popovers and h
 ### 4.4 Editor and diff
 
 - **Text view.** `NSTextView(usingTextLayoutManager: true)`, with a custom gutter view that draws line numbers and git hunk bars. It enumerates `NSTextLayoutFragment`s for visible lines. STTextView (GPL-3.0, acceptable for personal use) is allowed if the gutter or performance work becomes a sink; record that in DECISIONS.md.
-- **Highlighting.** SwiftTreeSitter plus Neon (BSD-3), with grammars from individual tree-sitter packages or CodeEditLanguages (MIT). Check each grammar's license when adding it.
+- **Highlighting.** SwiftTreeSitter (BSD-3) with the individual tree-sitter grammar packages (MIT), behind the `SyntaxHighlighter` protocol. `TreeSitterHighlighter` parses the whole buffer from scratch off the main thread, runs the grammar's own `highlights.scm` from its SwiftPM resource bundle, and maps capture names to the seven `SyntaxKind`s of UX §9.1. A grammar's query compiles once, off the main thread (Swift's takes about 300 ms in a debug build). Until it has, the file's first screen is colored by the old regex highlighter, where it covers the language. Neon isn't used: a full reparse of a 2,000-line file takes about 50 ms off the main thread, so incremental parsing isn't needed yet. HTML's `<script>` and `<style>` aren't injected. Check each grammar's license when adding it.
 - **Gutter.** The base text comes from the daemon (`git.baseText`). The diff runs in-app on lines with `CollectionDifference`, debounced 200 ms, so unsaved edits show immediately.
 - **DiffView.** A read-only text view over `git.diff` output, with line backgrounds for added and removed lines and hunk headers.
 - **Recovery.** File I/O is in the app, which reads and writes the file directly. The daemon only learns paths, for layout persistence and `file open` routing. Autosave writes recovery copies every 5 s while a buffer is dirty.

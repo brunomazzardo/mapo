@@ -48,6 +48,10 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
     var baseTextLoader: ((String) async -> String?)?
     /// The git gutter's marks against HEAD (R-ED-3).
     public private(set) var gitMarks = GitGutterMarks()
+    /// The last highlight pass, for `ui.snapshot`; nil for plain text.
+    public private(set) var highlight: HighlightSummary?
+    /// The language the editor highlights, nil for plain text.
+    public var language: SyntaxLanguage? { SyntaxLanguage(path: path) }
 
     private var document: FileDocument
     private let theme: EditorTheme
@@ -58,6 +62,8 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
     private var savedText = ""
     private var lines = LineIndex()
     private var highlighter: (any SyntaxHighlighter)?
+    /// Colors the first screen while `highlighter` is still preparing.
+    private var quickHighlighter: (any SyntaxHighlighter)?
     private var generation = 0
     private var highlightWork: DispatchWorkItem?
     private var recoveryTimer: Timer?
@@ -80,7 +86,9 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
         self.theme = theme
         document = FileDocument(path: path)
         recovery = recoveryDirectory.map { RecoveryStore(directory: $0) }
-        highlighter = SyntaxLanguage(path: path)?.highlighter
+        let language = SyntaxLanguage(path: path)
+        highlighter = language?.highlighter
+        quickHighlighter = language?.quickHighlighter
         super.init(frame: .zero)
         wantsLayer = true
         barView.theme = theme
@@ -418,24 +426,28 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
 
     /// On open, the first screenful highlights synchronously so the first frame is colored, and the whole
     /// buffer follows off the main thread; edits highlight off the main thread 150 ms after typing stops.
-    /// Read-only large files stay plain.
+    /// The first file of a language colors its first screen with the quick highlighter while the grammar
+    /// prepares off the main thread. Read-only large files stay plain.
     private func scheduleHighlight(now: Bool) {
         highlightWork?.cancel()
         guard let highlighter, let textView, kind == .text else { return }
         let text = textView.string
         let current = generation
-        if now {
+        if now, let first = highlighter.isPrepared ? highlighter : quickHighlighter {
             let head = min((text as NSString).length, lines.start(of: Self.firstScreenLines))
             let prefix = (text as NSString).substring(to: head)
-            applyHighlight(highlighter.tokens(in: prefix), in: NSRange(location: 0, length: head), generation: current)
-            if head == (text as NSString).length { return }
+            applyHighlight(
+                first.tokens(in: prefix), in: NSRange(location: 0, length: head), generation: current,
+                engine: first)
+            if head == (text as NSString).length, highlighter.isPrepared { return }
         }
         let work = DispatchWorkItem { [weak self] in
             Task.detached(priority: .userInitiated) {
                 let tokens = highlighter.tokens(in: text)
                 await MainActor.run {
                     self?.applyHighlight(
-                        tokens, in: NSRange(location: 0, length: (text as NSString).length), generation: current)
+                        tokens, in: NSRange(location: 0, length: (text as NSString).length), generation: current,
+                        engine: highlighter)
                 }
             }
         }
@@ -446,18 +458,25 @@ public final class FileEditorView: NSView, NSTextViewDelegate, CodeTextViewComma
     /// More lines than a tall pane shows.
     private static let firstScreenLines = 150
 
-    private func applyHighlight(_ tokens: [SyntaxToken], in range: NSRange, generation: Int) {
+    private func applyHighlight(
+        _ tokens: [SyntaxToken], in range: NSRange, generation: Int, engine: any SyntaxHighlighter
+    ) {
         guard generation == self.generation, let storage = textView?.textStorage,
             NSMaxRange(range) <= storage.length
         else { return }
+        var counts: [SyntaxKind: Int] = [:]
         storage.beginEditing()
         storage.addAttribute(.foregroundColor, value: theme.text, range: range)
         for token in tokens where NSMaxRange(token.range) <= NSMaxRange(range) {
+            counts[token.kind, default: 0] += 1
             if let color = theme.syntax[token.kind] {
                 storage.addAttribute(.foregroundColor, value: color, range: token.range)
             }
         }
         storage.endEditing()
+        highlight = HighlightSummary(
+            engine: engine is TreeSitterHighlighter ? "tree-sitter" : "regex", length: NSMaxRange(range),
+            kinds: counts)
     }
 
     // MARK: Current line
